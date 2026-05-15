@@ -1406,7 +1406,7 @@ function handleMenuAction(action, dataset) {
     case 'view-graph':        setViewMode('graph'); break;
     case 'change-workspace':  showWorkspaceInput(); break;
     case 'new-pipeline':      openCreateModal(); break;
-    case 'add-thread':        openThreadModal(); break;
+    case 'add-stages':        openStagesModal(); break;
     case 'edit-config':       openConfigModal(); break;
     case 'purge-pipeline':    openPurgePipelineModal(); break;
     case 'delete-pipeline':   openDeletePipelineModal(); break;
@@ -1516,8 +1516,8 @@ document.querySelectorAll('.view-tab').forEach(btn => {
 
 $('btn-sidebar-toggle').addEventListener('click', toggleSidebar);
 
-// "+ New Thread" button → opens the Add Thread modal
-$('btn-new-pipeline').addEventListener('click', openThreadModal);
+// "Add Stages" button → opens the Add Stages modal
+$('btn-new-pipeline').addEventListener('click', openStagesModal);
 // "New Pipeline" button → opens the Create Pipeline modal
 $('btn-new-pipeline-create').addEventListener('click', openCreateModal);
 // Clear pending (non-running) builds from queue
@@ -1691,8 +1691,7 @@ $('ctx-menu').addEventListener('click', async e => {
     case 'rename-stage':    promptRenameStage(stageName); break;
     case 'delete-stage':    openDeleteStageModal(stageName); break;
     case 'paste-clipboard': pasteFromClipboard(stageName, basePath); break;
-    case 'gr-new-stage':    openThreadModal(); break;
-    case 'gr-new-thread':   openThreadModal(); break;
+    case 'gr-new-stage':    openStagesModal(); break;
     case 'run-build':       runBuild(stageName); break;
     case 'run-build-file':  runBuild(stageName, path.replace(/\.[^.]+$/, '')); break;
   }
@@ -1721,13 +1720,23 @@ async function promptNewFile(stageName, basePath, viewHint) {
   stageName = stageName || getActiveStage();
   if (!stageName) { await appAlert('Select a stage first'); return; }
   const view = (viewHint && viewHint !== 'graph') ? viewHint : state.viewMode;
-  const name = await appPrompt('New file name:');
-  if (!name) return;
+  let name, content = '';
+  if (view === 'build') {
+    const raw = await appPromptExt('New build file name:');
+    if (!raw) return;
+    name = raw.name + '.' + raw.ext;
+    if (raw.ext === 'py') {
+      content = 'env_block = """\n```env\nTARGET=\n```\n"""\nimport os\nimport time\nimport sys\nfrom lips.utils.parse_build_files import env_from_build_file\n_, env = env_from_build_file(env_block)\n';
+    }
+  } else {
+    name = await appPrompt('New file name:');
+    if (!name) return;
+  }
   const relPath = basePath ? `${basePath}/${name}` : name;
   try {
     const res = await fetch(
       `/api/file/${encodeURIComponent(state.currentPipeline)}/${encodeURIComponent(stageName)}/${view}`,
-      { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({path: relPath, content: ''}) }
+      { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({path: relPath, content}) }
     );
     if (!res.ok) { await appAlert('Error: ' + (await res.text())); return; }
     await refreshStageFiles(stageName);
@@ -1873,7 +1882,7 @@ async function refreshStageFiles(stageName) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   STAGE ROW HELPERS  (used by Add-Thread modal)
+   STAGE ROW HELPERS  (used by Add Stages modal)
    ═══════════════════════════════════════════════════════════════════ */
 function addStageRow(containerId) {
   const container = $(containerId);
@@ -1885,18 +1894,13 @@ function addStageRow(containerId) {
   nameInput.placeholder = 'stage-name';
   nameInput.className = 'stage-row-name';
 
-  const fileInput = document.createElement('input');
-  fileInput.type = 'text';
-  fileInput.placeholder = 'next-stage.md';
-  fileInput.className = 'stage-row-name stage-row-file';
-
   const delBtn = document.createElement('button');
   delBtn.type = 'button';
   delBtn.textContent = '×';
   delBtn.className = 'stage-row-del';
   delBtn.addEventListener('click', () => row.remove());
 
-  row.append(nameInput, fileInput, delBtn);
+  row.append(nameInput, delBtn);
   container.appendChild(row);
   nameInput.focus();
 }
@@ -1905,17 +1909,16 @@ function collectStages(containerId) {
   const container = $(containerId);
   const result = [];
   for (const row of container.querySelectorAll('.stage-row')) {
-    const name      = row.querySelector('.stage-row-name')?.value.trim() ?? '';
-    const buildFile = row.querySelector('.stage-row-file')?.value.trim() ?? '';
-    if (name) result.push({ name, build_file: buildFile });
+    const name = row.querySelector('.stage-row-name')?.value.trim() ?? '';
+    if (name) result.push({ name, build_file: '' });
   }
   return result;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   MODAL — ADD THREAD
+   MODAL — ADD STAGES
    ═══════════════════════════════════════════════════════════════════ */
-function openThreadModal() {
+function openStagesModal() {
   if (!state.currentPipeline) { appAlert('Select a pipeline first'); return; }
   $('thread-modal').classList.remove('hidden');
   $('th-pipe-name').textContent = state.currentPipeline;
@@ -2462,7 +2465,6 @@ $('graph-container').addEventListener('contextmenu', e => {
   ctx.innerHTML = '';
   ctx.dataset.stage = ''; ctx.dataset.path = ''; ctx.dataset.isdir = 'false'; ctx.dataset.view = '';
   ctx.appendChild(_ctxItem('New Stage…',  'gr-new-stage'));
-  ctx.appendChild(_ctxItem('New Thread…', 'gr-new-thread'));
   ctx.classList.remove('hidden');
   ctx.style.left = e.clientX + 'px';
   ctx.style.top  = e.clientY + 'px';
@@ -2519,7 +2521,7 @@ $('btn-copy-output').addEventListener('click', () => {
    submitFn: clicks the primary action button (Enter) — null = same as cancel
    ────────────────────────────────────────────────────────────────── */
 const _MODAL_STACK = [
-  { id: 'thread-modal',   cancelFn: () => $('thread-modal').classList.add('hidden'),   submitFn: () => $('btn-submit-thread').click()  },
+  { id: 'thread-modal',   cancelFn: () => $('thread-modal').classList.add('hidden'),   submitFn: () => $('btn-submit-thread').click() },
   { id: 'create-modal',   cancelFn: () => $('create-modal').classList.add('hidden'),   submitFn: () => $('btn-submit-create').click()  },
   { id: 'config-modal',   cancelFn: () => $('config-modal').classList.add('hidden'),   submitFn: () => $('btn-submit-config').click()  },
   { id: 'env-modal',      cancelFn: () => $('env-modal').classList.add('hidden'),      submitFn: () => $('btn-submit-env').click()     },
@@ -3283,7 +3285,9 @@ window.addEventListener('mouseup', async () => {
       const fileName = safeName + '.' + raw.ext;
       const content  = fromStage === toStage
         ? 'Your task is to update the repository <env:SOURCE> by generating files needed to be updated.\n'
-        : '```env\nTARGET=' + toStage + '\n```\n\nYour task is to transform the repository <env:SOURCE> to <env:TARGET> by generating files.\n';
+        : raw.ext === 'py'
+          ? 'env_block = """\n```env\nTARGET=' + toStage + '\n```\n"""\nimport os\nimport time\nimport sys\nfrom lips.utils.parse_build_files import env_from_build_file\n_, env = env_from_build_file(env_block)\n'
+          : '```env\nTARGET=' + toStage + '\n```\n\nYour task is to transform the repository <env:SOURCE> to <env:TARGET> by generating files.\n';
       try {
         const r = await fetch(
           `/api/file/${encodeURIComponent(state.currentPipeline)}/${encodeURIComponent(fromStage)}/build?path=${encodeURIComponent(fileName)}`,

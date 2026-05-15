@@ -56,7 +56,7 @@
     <div class="mi" data-menu="pipeline"><span>Pipeline</span>
       <div class="mdd">
         <div class="mdi" data-action="new-pipeline">New Pipeline...</div>
-        <div class="mdi" data-action="add-thread">Add Thread...</div>
+        <div class="mdi" data-action="add-stages">Add Stages...</div>
         <div class="mdi" data-action="edit-config">Edit Config...</div>
         <div class="mds"></div>
         <div class="mdi" data-action="purge-pipeline">Purge Pipeline...</div>
@@ -102,7 +102,7 @@
     </div>
     <button class="titlebar-btn" id="btn-edit-env-ws" title="Edit workspace .env">&#128273; .env</button>
     <button class="titlebar-btn" id="btn-config" title="Edit pipeline config.json">&#9881; Config</button>
-    <button class="titlebar-btn" id="btn-new-pipeline">New Thread</button>
+    <button class="titlebar-btn" id="btn-new-pipeline">Add Stages</button>
     <button class="titlebar-btn primary" id="btn-new-pipeline-create">New Pipeline</button>
   </header>
 
@@ -212,15 +212,14 @@
   </div>
 </div>
 
-<!-- Add Thread Modal -->
+<!-- Add Stages Modal -->
 <div id="thread-modal" class="overlay hidden">
   <div class="modal" style="max-width:500px">
-    <div class="mhdr"><h2>Add Thread &#183; <span id="th-pipe-name"></span></h2><button class="mx" id="btn-close-thread">&#x2715;</button></div>
+    <div class="mhdr"><h2>Add Stages &#183; <span id="th-pipe-name"></span></h2><button class="mx" id="btn-close-thread">&#x2715;</button></div>
     <div class="mbody">
-      <p style="font-size:11px;color:var(--fg-dim);margin-bottom:10px">Adds stages to the current pipeline. Existing stage names are skipped. The last stage is treated as final (no TARGET). Leave build file blank for auto-naming.</p>
+      <p style="font-size:11px;color:var(--fg-dim);margin-bottom:10px">Adds stages to the current pipeline. Existing stage names are skipped. The last stage is treated as final (no TARGET).</p>
       <div class="fl">
         <span class="flabel">Stages</span>
-        <div class="stage-row-hdr"><span>Stage name</span><span>Build file name &amp; type</span></div>
         <div id="th-stages"></div>
         <button class="add-row-btn" id="btn-th-add">+ Add stage</button>
       </div>
@@ -235,7 +234,7 @@
     </div>
     <div class="mftr">
       <button class="titlebar-btn" id="btn-cancel-thread">Cancel</button>
-      <button class="titlebar-btn primary" id="btn-submit-thread">Add Thread</button>
+      <button class="titlebar-btn primary" id="btn-submit-thread">Add Stages</button>
     </div>
   </div>
 </div>

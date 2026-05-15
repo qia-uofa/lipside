@@ -509,9 +509,9 @@ async def create_pipeline(body: CreatePipelineBody):
             is_final = (i + 1 == len(stages))
             if build_file == "":
                 if not is_final:
-                    build_file = f"{stages[i+1].get("name", "").strip()}.md"
+                    build_file = f"{stages[i+1].get('name', '').strip()}.py"
                 else:
-                    build_file = f"{stages[i].get("name", "").strip()}.md"
+                    build_file = f"{stages[i].get('name', '').strip()}.py"
 
                     
 
@@ -529,14 +529,28 @@ async def create_pipeline(body: CreatePipelineBody):
                 pass
             else:
                 next_stage = stages[i + 1].get("name", "").strip() if i + 1 < len(stages) else ""
-                content = (
-                    "```env\n"
-                    f"TARGET={next_stage}\n"
-                    "```\n\n"
-                    "```targetignore\n"
-                    "*\n"
-                    "```\n\n"
-                )
+                if bf_path.suffix == ".py":
+                    content = (
+                        'env_block = """\n'
+                        "```env\n"
+                        f"TARGET={next_stage}\n"
+                        "```\n"
+                        '"""\n'
+                        "import os\n"
+                        "import time\n"
+                        "import sys\n"
+                        "from lips.utils.parse_build_files import env_from_build_file\n"
+                        "_, env = env_from_build_file(env_block)\n"
+                    )
+                else:
+                    content = (
+                        "```env\n"
+                        f"TARGET={next_stage}\n"
+                        "```\n\n"
+                        "```targetignore\n"
+                        "*\n"
+                        "```\n\n"
+                    )
                 bf_path.write_text(content, encoding="utf-8")
 
     return {"ok": True, "pipeline": body.name, "skipped": skipped}
