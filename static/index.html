@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LIPSIDE</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%2312141a'/><text x='50%25' y='54%25' dominant-baseline='middle' text-anchor='middle' font-family='monospace' font-weight='bold' font-size='18' fill='%234493f8'>L</text></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="view-repo">
+<div id="app">
+
+  <!-- Menubar -->
+  <nav id="menubar">
+    <div class="mi" data-menu="file"><span>File</span>
+      <div class="mdd">
+        <div class="mdi" data-action="new-file">New File</div>
+        <div class="mdi" data-action="new-folder">New Folder</div>
+        <div class="mds"></div>
+        <div class="mdi" data-action="save">Save <kbd>Ctrl+S</kbd></div>
+        <div class="mdi" data-action="save-all">Save All <kbd>Ctrl+Shift+S</kbd></div>
+        <div class="mds"></div>
+        <div class="mdi" data-action="close-tab">Close Tab <kbd>Ctrl+W</kbd></div>
+        <div class="mdi" data-action="close-all">Close All Tabs</div>
+      </div>
+    </div>
+    <div class="mi" data-menu="edit"><span>Edit</span>
+      <div class="mdd">
+        <div class="mdi" data-action="find">Find <kbd>Ctrl+F</kbd></div>
+        <div class="mdi" data-action="replace">Replace <kbd>Ctrl+H</kbd></div>
+        <div class="mdi" data-action="go-to-line">Go to Line <kbd>Ctrl+G</kbd></div>
+        <div class="mds"></div>
+        <div class="mdi" data-action="select-all">Select All <kbd>Ctrl+A</kbd></div>
+        <div class="mds"></div>
+        <div class="mdi" data-action="format-json">Format JSON</div>
+      </div>
+    </div>
+    <div class="mi" data-menu="view"><span>View</span>
+      <div class="mdd">
+        <div class="mdi" data-action="toggle-sidebar">Toggle Sidebar <kbd>Ctrl+B</kbd></div>
+        <div class="mdi" data-action="toggle-preview">Toggle Preview</div>
+        <div class="mds"></div>
+        <div class="mdi" data-action="view-repo">View: repo</div>
+        <div class="mdi" data-action="view-build">View: build</div>
+        <div class="mdi" data-action="view-out">View: out</div>
+        <div class="mdi" data-action="view-graph">View: graph</div>
+        <div class="mds"></div>
+        <div class="mdi" data-action="change-workspace">Change Workspace...</div>
+        <div class="mds"></div>
+        <div class="mdi" data-action="zoom-in">Zoom In <kbd>Ctrl++</kbd></div>
+        <div class="mdi" data-action="zoom-out">Zoom Out <kbd>Ctrl+-</kbd></div>
+      </div>
+    </div>
+    <div class="mi" data-menu="pipeline"><span>Pipeline</span>
+      <div class="mdd">
+        <div class="mdi" data-action="new-pipeline">New Pipeline...</div>
+        <div class="mdi" data-action="add-thread">Add Thread...</div>
+        <div class="mdi" data-action="edit-config">Edit Config...</div>
+        <div class="mds"></div>
+        <div class="mdi" data-action="purge-pipeline">Purge Pipeline...</div>
+        <div class="mdi ctx-danger" data-action="delete-pipeline">Delete Pipeline...</div>
+        <div class="mds"></div>
+        <div id="menu-pipeline-list"></div>
+      </div>
+    </div>
+    <div class="mi" data-menu="stage"><span>Stage</span>
+      <div class="mdd">
+        <div class="mdi" data-action="run-build-default">Run Build (First Stage)</div>
+        <div class="mdi" data-action="run-all-stages">Run All Stages</div>
+        <div class="mds"></div>
+        <div class="mdi" data-action="new-file-here">New File in Stage</div>
+        <div class="mdi" data-action="new-folder-here">New Folder in Stage</div>
+        <div class="mdi" data-action="paste-clipboard">Paste from Clipboard</div>
+      </div>
+    </div>
+    <div class="mi" data-menu="help"><span>Help</span>
+      <div class="mdd">
+        <div class="mdi" data-action="shortcuts-help">Keyboard Shortcuts</div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Titlebar -->
+  <header id="titlebar">
+    <button class="icon-btn" id="btn-sidebar-toggle" title="Toggle sidebar (Ctrl+B)">&#8801;</button>
+    <div id="view-tabs">
+      <button class="view-tab active" data-view="graph">graph</button>
+      <button class="view-tab" data-view="repo">repo</button>
+      <button class="view-tab" data-view="build">build</button>
+      <button class="view-tab" data-view="out">out</button>
+    </div>
+    <div id="pipeline-wrap">
+      <select id="pipeline-select"></select>
+    </div>
+    <span id="workspace-path" title="Click to change workspace"></span>
+    <div id="ws-input-wrap" class="hidden">
+      <input id="ws-input" type="text" placeholder="/path/to/workspace">
+      <button class="titlebar-btn" id="btn-ws-open">Open</button>
+      <button class="icon-btn" id="btn-ws-cancel">&#x2715;</button>
+    </div>
+    <button class="titlebar-btn" id="btn-edit-env-ws" title="Edit workspace .env">&#128273; .env</button>
+    <button class="titlebar-btn" id="btn-config" title="Edit pipeline config.json">&#9881; Config</button>
+    <button class="titlebar-btn" id="btn-new-pipeline">New Thread</button>
+    <button class="titlebar-btn primary" id="btn-new-pipeline-create">New Pipeline</button>
+  </header>
+
+  <!-- Main -->
+  <div id="main">
+    <aside id="sidebar">
+      <div id="file-tree"></div>
+      <div id="graph-sidebar" class="hidden"></div>
+      <!-- Graph view lives here in graph mode -->
+      <div id="graph-pane" class="hidden">
+        <div id="graph-toolbar">
+          <span id="graph-pipeline-label"></span>
+          <button class="titlebar-btn icon-btn" id="btn-graph-collapse" title="Collapse all repo windows">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="1" y="1" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/>
+              <rect x="8" y="1" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/>
+              <rect x="1" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/>
+              <rect x="8" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.4"/>
+              <line x1="3.5" y1="6.5" x2="3.5" y2="7.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              <line x1="10.5" y1="6.5" x2="10.5" y2="7.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            </svg>
+          </button>
+          <button class="titlebar-btn icon-btn" id="btn-graph-recenter" title="Recenter view">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="7" cy="7" r="2.2" stroke="currentColor" stroke-width="1.4"/>
+              <line x1="7" y1="1" x2="7" y2="3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              <line x1="7" y1="10.5" x2="7" y2="13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              <line x1="1" y1="7" x2="3.5" y2="7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              <line x1="10.5" y1="7" x2="13" y2="7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            </svg>
+          </button>
+          <button class="titlebar-btn icon-btn" id="btn-graph-refresh" title="Refresh graph">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12.5 7A5.5 5.5 0 1 1 9.5 2.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              <polyline points="9.5,1 9.5,3.5 12,3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+        <div id="graph-container"></div>
+      </div>
+    </aside>
+    <div id="sidebar-resize" class="vr-handle"></div>
+    <div id="editor-area">
+      <div id="tab-bar"></div>
+      <div id="tab-bar-actions">
+        <button class="icon-btn tab-action-btn hidden" id="btn-toggle-preview" title="Toggle markdown preview">&#10697;</button>
+        <button class="icon-btn tab-action-btn" id="btn-close-others" title="Close Others">&#8942;</button>
+        <button class="icon-btn tab-action-btn" id="btn-close-all-tabs" title="Close All">&#10006;</button>
+      </div>
+      <div id="editor-preview">
+        <div id="editor-wrap">
+          <div id="editor-container"></div>
+          <div id="empty-editor">
+            <div class="el-logo">LIPSIDE</div>
+            <p>Select a pipeline and open a file</p>
+          </div>
+        </div>
+        <div id="preview-resize" class="vr-handle hidden"></div>
+        <div id="preview-pane" class="hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="build-bar">
+    <button class="icon-btn build-toggle-btn" id="btn-toggle-output" title="Toggle output">&#9660;</button>
+    <span class="build-bar-label">OUTPUT</span>
+    <span id="build-status"></span>
+    <button class="icon-btn" id="btn-copy-output" title="Copy output">&#128203;</button>
+    <button class="icon-btn" id="btn-clear-output" title="Clear output">&#10006;</button>
+  </div>
+
+  <div id="build-output-container">
+    <div id="output-resize" class="hr-handle" title="Drag to resize"></div>
+    <pre id="build-output"></pre>
+  </div>
+
+</div>
+
+<!-- Create Pipeline Modal (no stage rows) -->
+<div id="create-modal" class="overlay hidden">
+  <div class="modal" style="max-width:480px">
+    <div class="mhdr"><h2>New Pipeline</h2><button class="mx" id="btn-close-create">&#x2715;</button></div>
+    <div class="mbody">
+      <label class="fl">Pipeline name
+        <input id="cr-name" type="text" placeholder="my-pipeline" autocomplete="off">
+      </label>
+      <div class="fl-row">
+        <label class="fl">Provider<select id="cr-provider"></select></label>
+        <label class="fl">Model<select id="cr-model"></select></label>
+      </div>
+      <label class="fl hidden">
+        <input id="cr-model-manual" type="text" placeholder="anthropic/claude-sonnet-4-6">
+      </label>
+      <div class="fl-row">
+        <label class="fl">Max tokens<input id="cr-max-tokens" type="number" value="20000"></label>
+        <label class="fl">Temperature<input id="cr-temperature" type="number" value="0" step="0.1"></label>
+      </div>
+      <label class="fl">API key variable
+        <select id="cr-api-var"></select>
+      </label>
+      <div id="cr-err" class="ferr hidden"></div>
+    </div>
+    <div class="mftr">
+      <button class="titlebar-btn" id="btn-cancel-create">Cancel</button>
+      <button class="titlebar-btn primary" id="btn-submit-create">Create Pipeline</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Thread Modal -->
+<div id="thread-modal" class="overlay hidden">
+  <div class="modal" style="max-width:500px">
+    <div class="mhdr"><h2>Add Thread &#183; <span id="th-pipe-name"></span></h2><button class="mx" id="btn-close-thread">&#x2715;</button></div>
+    <div class="mbody">
+      <p style="font-size:11px;color:var(--fg-dim);margin-bottom:10px">Adds stages to the current pipeline. Existing stage names are skipped. The last stage is treated as final (no TARGET). Leave build file blank for auto-naming.</p>
+      <div class="fl">
+        <span class="flabel">Stages</span>
+        <div class="stage-row-hdr"><span>Stage name</span><span>Build file name &amp; type</span></div>
+        <div id="th-stages"></div>
+        <button class="add-row-btn" id="btn-th-add">+ Add stage</button>
+      </div>
+      <label class="th-toggle-row">
+        <span class="toggle-track">
+          <input type="checkbox" id="th-overwrite">
+          <span class="toggle-thumb"></span>
+        </span>
+        <span class="toggle-lbl">Overwrite existing build files</span>
+      </label>
+      <div id="th-err" class="ferr hidden"></div>
+    </div>
+    <div class="mftr">
+      <button class="titlebar-btn" id="btn-cancel-thread">Cancel</button>
+      <button class="titlebar-btn primary" id="btn-submit-thread">Add Thread</button>
+    </div>
+  </div>
+</div>
+
+<!-- Config Modal -->
+<div id="config-modal" class="overlay hidden">
+  <div class="modal" style="max-width:500px">
+    <div class="mhdr">
+      <h2>Config &#183; <span id="cfg-pipe-name"></span></h2>
+      <button class="mx" id="btn-close-config">&#x2715;</button>
+    </div>
+    <div class="mbody">
+      <div class="fl-row">
+        <label class="fl">Provider<select id="cfg-provider"></select></label>
+        <label class="fl">Model<select id="cfg-model-sel"></select></label>
+      </div>
+      <label class="fl hidden">
+        <input id="cfg-model-manual" type="text" placeholder="anthropic/claude-sonnet-4-6" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="fl-row">
+        <label class="fl">Max tokens<input id="cfg-max-tokens" type="number" min="1" step="1000"></label>
+        <label class="fl">Temperature<input id="cfg-temperature" type="number" min="0" max="2" step="0.1"></label>
+        <label class="fl">Timeout (s)<input id="cfg-timeout" type="number" min="10" step="60"></label>
+      </div>
+      <label class="fl">API key env var
+        <select id="cfg-api-var"></select>
+      </label>
+      <div class="cfg-extra-btns">
+        <button class="titlebar-btn" id="btn-edit-messages">Edit Messages...</button>
+        <button class="titlebar-btn" id="btn-open-config-json" title="Open config.json in editor">&#128196; Open config.json</button>
+      </div>
+      <div id="cfg-err" class="ferr hidden"></div>
+    </div>
+    <div class="mftr">
+      <button class="titlebar-btn" id="btn-cancel-config">Cancel</button>
+      <button class="titlebar-btn primary" id="btn-submit-config">Save Config</button>
+    </div>
+  </div>
+</div>
+
+<!-- Messages UI Modal -->
+<div id="messages-modal" class="overlay hidden">
+  <div class="modal modal-wide">
+    <div class="mhdr">
+      <h2>Messages &#183; <span id="msg-pipe-name"></span></h2>
+      <button class="mx" id="btn-close-messages">&#x2715;</button>
+    </div>
+    <div class="mbody">
+      <p class="cfg-hint">Conversation template sent to the LLM on every build. Drag rows to reorder.</p>
+      <div id="msg-list"></div>
+      <button class="add-row-btn" id="btn-msg-add">+ Add message</button>
+      <div id="msg-err" class="ferr hidden"></div>
+    </div>
+    <div class="mftr">
+      <button class="titlebar-btn" id="btn-cancel-messages">Cancel</button>
+      <button class="titlebar-btn primary" id="btn-submit-messages">Save Messages</button>
+    </div>
+  </div>
+</div>
+
+<!-- Workspace .env Editor Modal -->
+<div id="env-modal" class="overlay hidden">
+  <div class="modal" style="max-width:520px">
+    <div class="mhdr">
+      <h2>Workspace .env</h2>
+      <button class="mx" id="btn-close-env">&#x2715;</button>
+    </div>
+    <div class="mbody">
+      <p class="cfg-hint">Environment variables shared across all pipelines. Click <strong>+</strong> to add, drag rows to reorder.</p>
+      <div id="env-list"></div>
+      <button class="add-row-btn" id="btn-env-add">+ Add variable</button>
+      <div id="env-err" class="ferr hidden"></div>
+    </div>
+    <div class="mftr">
+      <button class="titlebar-btn" id="btn-cancel-env">Cancel</button>
+      <button class="titlebar-btn primary" id="btn-submit-env">Save .env</button>
+    </div>
+  </div>
+</div>
+
+<!-- Purge Confirm Modal -->
+<div id="purge-modal" class="overlay hidden">
+  <div class="modal" style="max-width:400px">
+    <div class="mhdr">
+      <h2>Purge</h2>
+      <button class="mx" id="btn-close-purge">&#x2715;</button>
+    </div>
+    <div class="mbody">
+      <p id="purge-msg" style="color:var(--fg-dim);font-size:13px"></p>
+    </div>
+    <div class="mftr">
+      <button class="titlebar-btn" id="btn-cancel-purge">Cancel</button>
+      <button class="titlebar-btn danger" id="btn-confirm-purge">Purge</button>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Confirm Modal -->
+<div id="delete-modal" class="overlay hidden">
+  <div class="modal" style="max-width:400px">
+    <div class="mhdr">
+      <h2>Delete</h2>
+      <button class="mx" id="btn-close-delete">&#x2715;</button>
+    </div>
+    <div class="mbody">
+      <p id="delete-msg" style="color:var(--fg-dim);font-size:13px"></p>
+      <p style="color:var(--red);font-size:12px;margin-top:8px">&#9888; This permanently removes the directory and all its contents.</p>
+    </div>
+    <div class="mftr">
+      <button class="titlebar-btn" id="btn-cancel-delete">Cancel</button>
+      <button class="titlebar-btn danger" id="btn-confirm-delete">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- Build Queue Panel -->
+<div id="build-queue-panel" class="hidden">
+  <div id="build-queue-hdr">
+    <span>Build Queue</span>
+    <button class="icon-btn" id="btn-clear-queue" title="Clear pending builds">&#x2715;</button>
+  </div>
+  <div id="build-queue-list"></div>
+</div>
+
+<!-- Context Menu (items built dynamically by handleTreeContextMenu) -->
+<div id="ctx-menu" class="hidden"></div>
+
+<!-- App Prompt Modal -->
+<div id="app-prompt-modal" class="overlay hidden">
+  <div class="modal" style="max-width:380px">
+    <div class="mhdr"><h2 id="app-prompt-title">Input</h2></div>
+    <div class="mbody">
+      <input id="app-prompt-input" type="text" class="cfg-text-input" style="width:100%;box-sizing:border-box" />
+    </div>
+    <div class="mftr">
+      <button class="titlebar-btn" id="app-prompt-cancel">Cancel</button>
+      <button class="titlebar-btn primary" id="app-prompt-ok">OK</button>
+    </div>
+  </div>
+</div>
+
+<!-- App Alert Modal -->
+<div id="app-alert-modal" class="overlay hidden">
+  <div class="modal" style="max-width:380px">
+    <div class="mhdr"><h2 id="app-alert-title">Notice</h2></div>
+    <div class="mbody">
+      <p id="app-alert-msg" style="font-size:13px;margin:0;white-space:pre-wrap"></p>
+    </div>
+    <div class="mftr">
+      <button class="titlebar-btn primary" id="app-alert-ok">OK</button>
+    </div>
+  </div>
+</div>
+
+<!-- App Confirm Modal -->
+<div id="app-confirm-modal" class="overlay hidden">
+  <div class="modal" style="max-width:380px">
+    <div class="mhdr"><h2 id="app-confirm-title">Confirm</h2></div>
+    <div class="mbody">
+      <p id="app-confirm-msg" style="font-size:13px;margin:0;white-space:pre-wrap"></p>
+    </div>
+    <div class="mftr">
+      <button class="titlebar-btn" id="app-confirm-cancel">Cancel</button>
+      <button class="titlebar-btn primary" id="app-confirm-ok">OK</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/markdown/markdown.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/shell/shell.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/search.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/searchcursor.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/dialog/dialog.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
+<script src="/static/app.js"></script>

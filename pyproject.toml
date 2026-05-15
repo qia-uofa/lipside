@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lipside"
+version = "0.1.0"
+description = "LIPSIDE – a web IDE for the LIPS pipeline framework"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "websockets>=12.0",
+    "pywinpty>=2.0.0; sys_platform == 'win32'",
+    "lips @ git+https://github.com/qia-uofa/lips.git",
+    "dotenv==0.9.9",
+    "litellm==1.83.7",
+    "pathspec==1.1.0",
+    "python-dotenv==1.0.1",
+    "python-pptx",
+    "python-docx",
+    "openpyxl",
+    "pdfplumber",
+]
+
+[project.scripts]
+lipside = "lipside.main:main"
+
+# The lipside/ directory IS the package, so we map it explicitly.
+# package-dir tells setuptools: "the Python package named 'lipside' lives
+# at '.' (this directory), and its sub-package 'lipside.routers' lives at
+# 'routers/'."  This lets `python -m pip install -e .` work when run from
+# inside the lipside/ folder.
+[tool.setuptools]
+packages = ["lipside", "lipside.routers"]
+
+[tool.setuptools.package-dir]
+"lipside"         = "."
+"lipside.routers" = "routers"
+
+# Ship the static assets (HTML / CSS / JS) with the installed package so
+# that `Path(__file__).parent / "static"` resolves correctly after install.
+[tool.setuptools.package-data]
+lipside = [
+    "static/*",
+    "static/**/*",
+]
