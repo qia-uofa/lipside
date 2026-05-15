@@ -200,9 +200,27 @@ function _renderBuildQueue() {
   });
 }
 
+/* Scan open build-view tabs for the building stage to find TARGET= values.
+   Returns a Set of target stage names found in currently-open build files. */
+function _getTargetStagesFromTabs(pipeline, stageName) {
+  const targets = new Set();
+  for (const tab of state.tabs) {
+    if (tab.pipeline !== pipeline || tab.stage !== stageName || tab.view !== 'build') continue;
+    const content = tab.content || '';
+    const m = content.match(/```env\s+([\s\S]*?)```/);
+    if (m) {
+      const tm = m[1].match(/^TARGET\s*=\s*(.+)$/m);
+      if (tm) targets.add(tm[1].trim());
+    }
+  }
+  return targets;
+}
+
 function _lockStageTabs(pipeline, stageName) {
+  const targetStages = _getTargetStagesFromTabs(pipeline, stageName);
   state.tabs.forEach(tab => {
-    if (tab.pipeline === pipeline && tab.stage === stageName && tab.view === 'repo' && !tab.readonly) {
+    if (tab.pipeline !== pipeline || tab.readonly || tab.view !== 'repo') return;
+    if (tab.stage === stageName || targetStages.has(tab.stage)) {
       tab._buildLocked = true;
     }
   });
@@ -215,7 +233,8 @@ function _lockStageTabs(pipeline, stageName) {
 }
 
 async function _unlockAndRefreshStageTabs(pipeline, stageName) {
-  const locked = state.tabs.filter(t => t._buildLocked && t.pipeline === pipeline && t.stage === stageName);
+  // Unlock all tabs locked by this build (source stage + any target stages)
+  const locked = state.tabs.filter(t => t._buildLocked && t.pipeline === pipeline);
   await Promise.all(locked.map(async tab => {
     try {
       const res = await fetch(
@@ -231,15 +250,21 @@ async function _unlockAndRefreshStageTabs(pipeline, stageName) {
   }));
   renderTabBar();
   // If the active tab was just unlocked, refresh CM in-place.
-  // Avoid calling loadIntoEditor here — that function is designed for tab switches and
-  // resets history, hides/shows layout elements, and causes visible glitches.
+  // Preserve cursor/scroll so the editor feels stable after unlock.
   if (state.activeTab !== null && cm) {
     const t = state.tabs[state.activeTab];
     if (t && locked.includes(t)) {
+      const cursor = cm.getCursor();
+      const scroll = cm.getScrollInfo();
       _cmLoading = true;
-      cm.setValue(t.content);
+      if (cm.getValue() !== t.content) {
+        cm.setValue(t.content);
+      }
       _cmLoading = false;
       cm.setOption('readOnly', false);
+      cm.refresh();
+      cm.setCursor(cursor);
+      cm.scrollTo(scroll.left, scroll.top);
     }
   }
 }
