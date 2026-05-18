@@ -19,9 +19,10 @@ def _purge_stage(stage_dir: Path):
         return
     pipe_dir = stage_dir.parent
     rb = _recycle_bin_repo(pipe_dir)
-    for item in repo.iterdir():
-        if item.name == ".gitignore":
-            continue
+    # Materialise the listing before moving anything — on Linux the directory
+    # handle backing iterdir() goes stale as soon as entries are renamed out.
+    items = [p for p in repo.iterdir() if p.name != ".gitignore"]
+    for item in items:
         _move_to_recycle(item, rb)
 
 
