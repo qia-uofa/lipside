@@ -15,6 +15,7 @@ dependencies = [
     "lips @ git+https://github.com/qia-uofa/lips.git",
     "dotenv==0.9.9",
     "litellm==1.83.7",
+    "cryptography>=41.0",
     "pathspec==1.1.0",
     "python-dotenv==1.0.1",
     "python-pptx",

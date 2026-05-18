@@ -1,5 +1,5 @@
 """LIPSIDE - FastAPI entry point."""
-import argparse, sys, uvicorn, webbrowser, threading, time, secrets
+import argparse, sys, uvicorn, webbrowser, threading, time, secrets, ipaddress
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import Response, JSONResponse, HTMLResponse, RedirectResponse
@@ -9,6 +9,80 @@ from lipside.routers import workspace, files, build, create, config, purge, term
 
 BASE = Path(__file__).parent
 LOCALHOST_IPS = {"127.0.0.1", "::1", "localhost"}
+
+
+# ── TLS ───────────────────────────────────────────────────────────────────────
+
+def _ensure_tls_cert() -> tuple[Path, Path]:
+    """Return (cert_path, key_path), generating a self-signed cert if missing.
+
+    The cert lives in ~/.lipside/ and is reused across all workspaces.
+    It covers localhost / 127.0.0.1 / ::1 so the browser can connect on
+    loopback without an additional SAN warning.  Remote clients will still
+    see an 'untrusted certificate' browser warning (expected for self-signed
+    certs) but the connection is still encrypted.
+
+    The cert is valid for 10 years.  Delete lipside.crt / lipside.key from
+    ~/.lipside/ to force regeneration.
+    """
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    import datetime
+
+    tls_dir = Path.home() / ".lipside"
+    tls_dir.mkdir(parents=True, exist_ok=True)
+    cert_path = tls_dir / "lipside.crt"
+    key_path  = tls_dir / "lipside.key"
+
+    if cert_path.exists() and key_path.exists():
+        return cert_path, key_path
+
+    print("[LIPSIDE] Generating self-signed TLS certificate …")
+
+    # 2048-bit RSA key
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    key_path.write_bytes(
+        key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+    key_path.chmod(0o600)
+
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, "LIPSIDE"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "LIPSIDE"),
+    ])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime.now(datetime.timezone.utc))
+        .not_valid_after(
+            datetime.datetime.now(datetime.timezone.utc)
+            + datetime.timedelta(days=3650)
+        )
+        .add_extension(
+            x509.SubjectAlternativeName([
+                x509.DNSName("localhost"),
+                x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+                x509.IPAddress(ipaddress.IPv6Address("::1")),
+            ]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    print(f"[LIPSIDE] Certificate written to {cert_path}")
+    print(f"[LIPSIDE] To trust it system-wide, add {cert_path} to your OS/browser CA store.")
+    return cert_path, key_path
+
+
 ALLOWED_IPS: set[str] = set(LOCALHOST_IPS)
 
 # Passkey config (read from whitelist.txt at startup).
@@ -273,6 +347,7 @@ def main():
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8765, help="Port to listen on (default: 8765)")
     parser.add_argument("--all-interfaces", action="store_true", help="Bind to 0.0.0.0 (all network interfaces)")
+    parser.add_argument("--no-tls", action="store_true", help="Disable HTTPS and serve plain HTTP (not recommended outside loopback)")
     args = parser.parse_args()
     workspace_dir = Path(args.workspace).resolve()
     WORKSPACE_DIR = workspace_dir
@@ -320,9 +395,22 @@ def main():
     elif args.host != "127.0.0.1":
         host = args.host
 
-    url = f"http://127.0.0.1:{args.port}"
+    # ── TLS setup ──────────────────────────────────────────────────────
+    ssl_kwargs: dict = {}
+    if args.no_tls:
+        scheme = "http"
+        print("[LIPSIDE] TLS disabled (--no-tls). Traffic is unencrypted.")
+    else:
+        cert_path, key_path = _ensure_tls_cert()
+        ssl_kwargs = {
+            "ssl_keyfile":  str(key_path),
+            "ssl_certfile": str(cert_path),
+        }
+        scheme = "https"
+
+    url = f"{scheme}://127.0.0.1:{args.port}"
     threading.Timer(1.2, webbrowser.open, args=[url]).start()
-    uvicorn.run(app, host=host, port=args.port, log_level="info")
+    uvicorn.run(app, host=host, port=args.port, log_level="info", **ssl_kwargs)
 
 
 if __name__ == "__main__":

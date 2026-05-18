@@ -289,7 +289,8 @@ function _processNextBuild() {
   const params = new URLSearchParams({ pipeline, stage: stageName });
   if (script) params.set('script', script);
 
-  const ws = new WebSocket(`ws://${location.host}/ws/build?${params}`);
+  const wsScheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${wsScheme}//${location.host}/ws/build?${params}`);
   _buildWs = ws;
 
   ws.onmessage = e => {
