@@ -13,17 +13,77 @@ LOCALHOST_IPS = {"127.0.0.1", "::1", "localhost"}
 
 # ── TLS ───────────────────────────────────────────────────────────────────────
 
+def _collect_san_entries() -> tuple[set[str], set]:
+    """Return (dns_names, ip_addresses) covering loopback + this machine."""
+    import socket
+    dns_names: set[str] = {"localhost"}
+    ip_addrs: set = {
+        ipaddress.IPv4Address("127.0.0.1"),
+        ipaddress.IPv6Address("::1"),
+    }
+    # Machine hostname
+    try:
+        hostname = socket.gethostname()
+        if hostname:
+            dns_names.add(hostname)
+            try:
+                ip_addrs.add(ipaddress.ip_address(socket.gethostbyname(hostname)))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # Primary outbound IP (no packets sent; just picks the right interface)
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            ip_addrs.add(ipaddress.ip_address(s.getsockname()[0]))
+    except Exception:
+        pass
+    return dns_names, ip_addrs
+
+
+def _cert_fingerprint(cert_pem: bytes) -> str:
+    """Return a human-readable SHA-256 fingerprint of a PEM certificate."""
+    import hashlib
+    from cryptography import x509 as _x509
+    from cryptography.hazmat.primitives.serialization import Encoding
+    der = _x509.load_pem_x509_certificate(cert_pem).public_bytes(Encoding.DER)
+    h = hashlib.sha256(der).hexdigest().upper()
+    return ":".join(h[i:i+2] for i in range(0, len(h), 2))
+
+
+def _print_cert_info(cert_path: Path) -> None:
+    """Print fingerprint and SAN entries for the active certificate."""
+    from cryptography import x509 as _x509
+    try:
+        pem = cert_path.read_bytes()
+        fp = _cert_fingerprint(pem)
+        cert = _x509.load_pem_x509_certificate(pem)
+        try:
+            san = cert.extensions.get_extension_for_class(_x509.SubjectAlternativeName)
+            dns  = san.value.get_values_for_type(_x509.DNSName)
+            ips  = [str(a) for a in san.value.get_values_for_type(_x509.IPAddress)]
+            print(f"[LIPSIDE] TLS cert SANs: DNS={dns} IPs={ips}")
+        except Exception:
+            pass
+        print(f"[LIPSIDE] TLS cert SHA-256 fingerprint:")
+        print(f"[LIPSIDE]   {fp}")
+        print(f"[LIPSIDE] Verify this fingerprint in your browser's cert viewer to confirm")
+        print(f"[LIPSIDE] the connection is not being intercepted.")
+    except Exception:
+        pass
+
+
 def _ensure_tls_cert() -> tuple[Path, Path]:
     """Return (cert_path, key_path), generating a self-signed cert if missing.
 
-    The cert lives in ~/.lipside/ and is reused across all workspaces.
-    It covers localhost / 127.0.0.1 / ::1 so the browser can connect on
-    loopback without an additional SAN warning.  Remote clients will still
-    see an 'untrusted certificate' browser warning (expected for self-signed
-    certs) but the connection is still encrypted.
+    The cert lives in ~/.lipside/ and is reused across all workspaces.  It
+    includes the machine's hostname and primary outbound IP in the SAN so
+    remote browsers don't hit a hostname-mismatch error.
 
-    The cert is valid for 10 years.  Delete lipside.crt / lipside.key from
-    ~/.lipside/ to force regeneration.
+    The cert is valid for 10 years.  To force regeneration (e.g. after the
+    machine's IP changes), delete ~/.lipside/lipside.crt and lipside.key and
+    restart LIPSIDE, or use --cert / --key to supply your own certificate.
     """
     from cryptography import x509
     from cryptography.x509.oid import NameOID
@@ -41,6 +101,8 @@ def _ensure_tls_cert() -> tuple[Path, Path]:
 
     print("[LIPSIDE] Generating self-signed TLS certificate …")
 
+    dns_names, ip_addrs = _collect_san_entries()
+
     # 2048-bit RSA key
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     key_path.write_bytes(
@@ -51,6 +113,10 @@ def _ensure_tls_cert() -> tuple[Path, Path]:
         )
     )
     key_path.chmod(0o600)
+
+    san_entries: list = [x509.DNSName(n) for n in sorted(dns_names)]
+    for addr in sorted(ip_addrs, key=str):
+        san_entries.append(x509.IPAddress(addr))
 
     subject = issuer = x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, "LIPSIDE"),
@@ -68,18 +134,17 @@ def _ensure_tls_cert() -> tuple[Path, Path]:
             + datetime.timedelta(days=3650)
         )
         .add_extension(
-            x509.SubjectAlternativeName([
-                x509.DNSName("localhost"),
-                x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
-                x509.IPAddress(ipaddress.IPv6Address("::1")),
-            ]),
+            x509.SubjectAlternativeName(san_entries),
             critical=False,
         )
         .sign(key, hashes.SHA256())
     )
     cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
     print(f"[LIPSIDE] Certificate written to {cert_path}")
-    print(f"[LIPSIDE] To trust it system-wide, add {cert_path} to your OS/browser CA store.")
+    print(f"[LIPSIDE] SANs: DNS={sorted(dns_names)}  IPs={sorted(ip_addrs, key=str)}")
+    print(f"[LIPSIDE] To permanently dismiss the browser warning, import {cert_path}")
+    print(f"[LIPSIDE] into your OS/browser CA trust store.")
+    print(f"[LIPSIDE] To regenerate (e.g. after an IP change): delete {cert_path}")
     return cert_path, key_path
 
 
@@ -348,6 +413,8 @@ def main():
     parser.add_argument("--port", type=int, default=8765, help="Port to listen on (default: 8765)")
     parser.add_argument("--all-interfaces", action="store_true", help="Bind to 0.0.0.0 (all network interfaces)")
     parser.add_argument("--no-tls", action="store_true", help="Disable HTTPS and serve plain HTTP (not recommended outside loopback)")
+    parser.add_argument("--cert", metavar="PATH", help="Path to a TLS certificate file (PEM). Disables auto-generation.")
+    parser.add_argument("--key",  metavar="PATH", help="Path to the matching TLS private key (PEM). Required with --cert.")
     args = parser.parse_args()
     workspace_dir = Path(args.workspace).resolve()
     WORKSPACE_DIR = workspace_dir
@@ -400,6 +467,22 @@ def main():
     if args.no_tls:
         scheme = "http"
         print("[LIPSIDE] TLS disabled (--no-tls). Traffic is unencrypted.")
+    elif args.cert or args.key:
+        if not (args.cert and args.key):
+            print("[LIPSIDE] ERROR: --cert and --key must be supplied together.", file=sys.stderr)
+            sys.exit(1)
+        cert_path = Path(args.cert).expanduser().resolve()
+        key_path  = Path(args.key).expanduser().resolve()
+        if not cert_path.exists():
+            print(f"[LIPSIDE] ERROR: cert file not found: {cert_path}", file=sys.stderr)
+            sys.exit(1)
+        if not key_path.exists():
+            print(f"[LIPSIDE] ERROR: key file not found: {key_path}", file=sys.stderr)
+            sys.exit(1)
+        ssl_kwargs = {"ssl_keyfile": str(key_path), "ssl_certfile": str(cert_path)}
+        scheme = "https"
+        print(f"[LIPSIDE] TLS: using provided cert {cert_path}")
+        _print_cert_info(cert_path)
     else:
         cert_path, key_path = _ensure_tls_cert()
         ssl_kwargs = {
@@ -407,6 +490,7 @@ def main():
             "ssl_certfile": str(cert_path),
         }
         scheme = "https"
+        _print_cert_info(cert_path)
 
     url = f"{scheme}://127.0.0.1:{args.port}"
     threading.Timer(1.2, webbrowser.open, args=[url]).start()
