@@ -188,18 +188,45 @@ async def ip_whitelist_middleware(request: Request, call_next):
     )
 
 
+def _extract_passkey(content_type: str, body: bytes) -> str:
+    """Pull the 'passkey' field out of a request body without needing python-multipart."""
+    from urllib.parse import parse_qs
+    import json as _json
+    text = body.decode("utf-8", errors="replace")
+    ctype = (content_type or "").lower()
+    if "application/x-www-form-urlencoded" in ctype:
+        parsed = parse_qs(text, keep_blank_values=True)
+        return (parsed.get("passkey", [""])[0] or "").strip()
+    if "application/json" in ctype:
+        try:
+            data = _json.loads(text or "{}")
+            return str(data.get("passkey", "")).strip()
+        except Exception:
+            return ""
+    # multipart/form-data: scrape the field naively rather than pulling in a parser dep.
+    if "multipart/form-data" in ctype:
+        import re
+        m = re.search(r'name="passkey"\r?\n\r?\n([^\r\n]*)', text)
+        if m:
+            return m.group(1).strip()
+    # Last resort: treat as urlencoded.
+    parsed = parse_qs(text, keep_blank_values=True)
+    return (parsed.get("passkey", [""])[0] or "").strip()
+
+
 @app.post("/unlock")
 async def unlock(request: Request):
     client_ip = request.client.host if request.client else None
     if not PASSKEY_CONFIG.get("allow_passkey"):
         return JSONResponse({"detail": "Passkey disabled"}, status_code=403)
-    try:
-        form = await request.form()
-    except Exception:
-        form = {}
-    submitted = (form.get("passkey") or "").strip()
+    body = await request.body()
+    submitted = _extract_passkey(request.headers.get("content-type", ""), body)
     current = PASSKEY_CONFIG.get("passkey", "")
     if not current or submitted != current:
+        print(
+            f"[LIPSIDE] Rejected unlock from {client_ip}: "
+            f"got={submitted!r} (len={len(submitted)}), expected len={len(current)}"
+        )
         return _passkey_form(error=True)
 
     # Success: unlock this IP for the timeout window, then rotate the passkey.
