@@ -1,11 +1,10 @@
 """Files router – CRUD for pipeline stage files."""
 import os, sys, shutil, subprocess, base64, io
-import send2trash
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from .workspace import get_workspace
+from .workspace import get_workspace, _recycle_bin_repo, _move_to_recycle
 
 _IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.tiff', '.tif'}
 _IMAGE_MIME = {
@@ -127,7 +126,9 @@ async def delete_file(pipeline: str, stage: str, view: str, path: str):
     target = _resolve(pipeline, stage, view, path)
     if not target.exists():
         raise HTTPException(404, "Not found")
-    send2trash.send2trash(str(target))
+    pipe_dir = get_workspace() / pipeline
+    rb = _recycle_bin_repo(pipe_dir)
+    _move_to_recycle(target, rb)
     return {"ok": True}
 
 
