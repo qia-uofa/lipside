@@ -150,13 +150,21 @@ def _ensure_tls_cert() -> tuple[Path, Path]:
 
 ALLOWED_IPS: set[str] = set(LOCALHOST_IPS)
 
-# Passkey config (read from whitelist.txt at startup).
+# Passkey config (read from whitelist.txt + workspace .env at startup).
 PASSKEY_CONFIG = {
     "allow_passkey": False,
     "passkey": "",
-    "timeout": 600,        # seconds
+    "timeout": 3600,       # seconds
     "passkey_digit": 6,    # length of the generated numeric passkey
 }
+
+# Default values written to whitelist.txt when it is first created.
+_WHITELIST_DEFAULTS = {
+    "allow_passkey": True,
+    "timeout": 3600,
+    "passkey_digit": 6,
+}
+_DEFAULT_PASSKEY = "893264"
 # IP -> epoch seconds when its temporary unlock expires
 UNLOCKED_IPS: dict[str, float] = {}
 WORKSPACE_DIR: Path | None = None
@@ -167,32 +175,77 @@ def _parse_bool(v: str) -> bool:
     return v.strip().lower() in ("true", "1", "yes", "on")
 
 
+# ── Workspace .env helpers (PASSKEY lives here, not in whitelist.txt) ─────────
+
+def _workspace_env_path(workspace_dir: Path) -> Path:
+    return workspace_dir / ".env"
+
+
+def load_env_passkey(workspace_dir: Path) -> str:
+    """Return the PASSKEY value from workspace/.env, or '' if absent."""
+    path = _workspace_env_path(workspace_dir)
+    if not path.exists():
+        return ""
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line.startswith("PASSKEY="):
+            return line[len("PASSKEY="):].strip()
+    return ""
+
+
+def save_env_passkey(workspace_dir: Path, passkey: str) -> None:
+    """Write/update PASSKEY=<passkey> in workspace/.env (preserves other lines)."""
+    path = _workspace_env_path(workspace_dir)
+    existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    other = [l for l in existing if not l.strip().startswith("PASSKEY=")]
+    other.append(f"PASSKEY={passkey}")
+    path.write_text("\n".join(other) + "\n", encoding="utf-8")
+
+
 def load_whitelist(workspace_dir: Path) -> tuple[list[str], dict]:
-    """Read <workspace>/whitelist.txt; create it with one empty line if missing.
+    """Read <workspace>/whitelist.txt, creating or patching it as needed.
 
     Returns (ips, config). IP lines are bare addresses. Config lines look like
-    key=value and recognize: allow_passkey, passkey, timeout, passkey_digit.
+    key=value and recognize: allow_passkey, timeout, passkey_digit.
+    The passkey itself is stored in workspace/.env as PASSKEY= (never here).
     Comments (#...) and blank lines are ignored.
+
+    Behaviour:
+    - Missing file   → create it with _WHITELIST_DEFAULTS; seed .env PASSKEY.
+    - Existing file  → parse it; add any missing default keys; migrate legacy
+                       passkey= lines to .env and strip them from the file.
     """
     path = workspace_dir / "whitelist.txt"
-    cfg = dict(PASSKEY_CONFIG)  # start from defaults
+    cfg: dict = {**PASSKEY_CONFIG}  # start from process defaults
     ips: list[str] = []
+
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("\n")
-        print(f"[LIPSIDE] Created {path} (empty -> localhost only)")
+        cfg.update(_WHITELIST_DEFAULTS)
+        write_whitelist(workspace_dir, ips, cfg)
+        if not load_env_passkey(workspace_dir):
+            save_env_passkey(workspace_dir, _DEFAULT_PASSKEY)
+            print(f"[LIPSIDE] Created workspace .env with default PASSKEY")
+        print(f"[LIPSIDE] Created {path} with defaults")
         return ips, cfg
-    for raw in path.read_text().splitlines():
+
+    # ── Parse existing file ───────────────────────────────────────────────────
+    seen_keys: set[str] = set()
+    migrated_passkey: str | None = None
+
+    for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         if "=" in line:
             key, _, val = line.partition("=")
             key, val = key.strip(), val.strip()
+            seen_keys.add(key)
             if key == "allow_passkey":
                 cfg["allow_passkey"] = _parse_bool(val)
             elif key == "passkey":
-                cfg["passkey"] = val
+                # Legacy: migrate value to .env, then drop from file.
+                migrated_passkey = val
             elif key == "timeout":
                 try: cfg["timeout"] = int(val)
                 except ValueError: pass
@@ -202,18 +255,44 @@ def load_whitelist(workspace_dir: Path) -> tuple[list[str], dict]:
             # unknown keys silently ignored
         else:
             ips.append(line)
+
+    # Migrate legacy passkey= → .env (only if .env doesn't already have one).
+    if migrated_passkey is not None:
+        if not load_env_passkey(workspace_dir):
+            save_env_passkey(workspace_dir, migrated_passkey)
+            print(f"[LIPSIDE] Migrated passkey from whitelist.txt → .env")
+
+    # Patch in any missing default keys.
+    needs_rewrite = migrated_passkey is not None
+    for key, default in _WHITELIST_DEFAULTS.items():
+        if key not in seen_keys:
+            cfg[key] = default
+            needs_rewrite = True
+            print(f"[LIPSIDE] Added missing whitelist.txt key: {key}={default}")
+
+    # Ensure .env has a passkey if still absent.
+    if not load_env_passkey(workspace_dir):
+        save_env_passkey(workspace_dir, _DEFAULT_PASSKEY)
+        print(f"[LIPSIDE] Created workspace .env with default PASSKEY")
+
+    if needs_rewrite:
+        write_whitelist(workspace_dir, ips, cfg)
+
     return ips, cfg
 
 
 def write_whitelist(workspace_dir: Path, ips: list[str], cfg: dict) -> None:
-    """Rewrite whitelist.txt with config header + IP list."""
+    """Rewrite whitelist.txt with config header + IP list.
+
+    The passkey itself is never written here; it lives in workspace/.env.
+    """
     path = workspace_dir / "whitelist.txt"
     lines = [
         "# LIPSIDE whitelist",
         "# Bare lines are allowed IPs. 0.0.0.0 allows everyone.",
+        "# Passkey value is stored in workspace .env as PASSKEY=",
         f"allow_passkey={'true' if cfg.get('allow_passkey') else 'false'}",
-        f"passkey={cfg.get('passkey', '')}",
-        f"timeout={int(cfg.get('timeout', 600))}",
+        f"timeout={int(cfg.get('timeout', 3600))}",
         f"passkey_digit={int(cfg.get('passkey_digit', 6))}",
         "",
     ]
@@ -227,13 +306,12 @@ def generate_passkey(n: int) -> str:
 
 
 def rotate_passkey() -> str:
-    """Generate a fresh passkey, update config, and persist to disk."""
+    """Generate a fresh passkey, update config, and persist to workspace .env."""
     with _WHITELIST_LOCK:
         new_key = generate_passkey(PASSKEY_CONFIG.get("passkey_digit", 6))
         PASSKEY_CONFIG["passkey"] = new_key
         if WORKSPACE_DIR is not None:
-            ips, _existing_cfg = load_whitelist(WORKSPACE_DIR)
-            write_whitelist(WORKSPACE_DIR, ips, PASSKEY_CONFIG)
+            save_env_passkey(WORKSPACE_DIR, new_key)
         return new_key
 
 
@@ -423,9 +501,10 @@ def main():
     if active:
         print(f"[LIPSIDE] PIPELINE={active}")
 
-    # Load whitelist + passkey config from the workspace.
+    # Load whitelist config from whitelist.txt; passkey from workspace .env.
     whitelist, cfg = load_whitelist(workspace_dir)
     PASSKEY_CONFIG.update(cfg)
+    PASSKEY_CONFIG["passkey"] = load_env_passkey(workspace_dir)
     ALLOWED_IPS.clear()
     ALLOWED_IPS.update(LOCALHOST_IPS)
     ALLOWED_IPS.update(whitelist)
