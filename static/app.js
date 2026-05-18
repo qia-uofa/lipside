@@ -2408,7 +2408,7 @@ function _graphDownstream(start) {
 }
 
 function openPurgeUpstreamModal(stageName) {
-  const targets = [stageName, ..._graphUpstream(stageName)];
+  const targets = [stageName, ..._graphUpstream(stageName)].filter(s => s !== 'Void');
   $('purge-msg').textContent =
     `Purge ${targets.length} stage(s) (self + upstream) of "${stageName}"? ` +
     `(${targets.join(', ')}) — repo files will be moved to the Recycle-Bin.`;
@@ -2426,7 +2426,7 @@ function openPurgeUpstreamModal(stageName) {
 }
 
 function openPurgeDownstreamModal(stageName) {
-  const targets = [stageName, ..._graphDownstream(stageName)];
+  const targets = [stageName, ..._graphDownstream(stageName)].filter(s => s !== 'Void');
   $('purge-msg').textContent =
     `Purge ${targets.length} stage(s) (self + downstream) of "${stageName}"? ` +
     `(${targets.join(', ')}) — repo files will be moved to the Recycle-Bin.`;
@@ -2686,6 +2686,7 @@ let _grNodeCoords = {};  // stageName → {x,y} original coords
 let _grSvgEl     = null;  // current graph <svg> element
 let _grStages    = [];    // current stage list (for port drag hit-testing)
 let _grEdgeList  = [];    // [{key, from, to}] — kept in sync with DOM for spread recompute
+let _grNodeSizes = {};    // stageName → {w, h, ox, oy} visual overrides (Void uses this)
 let _grScale     = 1;     // current graph zoom level (for popup drag conversion)
 let _grPanX      = 0;     // current pan X
 let _grPanY      = 0;     // current pan Y
@@ -2995,34 +2996,44 @@ function _mkArrowhead(mkS, tip, ux, uy, size, color) {
  *
  * Returns  : Map<key, {x1,y1,x2,y2,fromSide,toSide}>
  */
-function _computeSpreadPorts(edgeList, coords, W, H) {
-  const MARGIN = 12; // min px from box corner
+/* nodeSizes: optional map of stageName → {w, h, ox, oy} for nodes whose visual
+   rect differs from the standard W×H layout cell (e.g. the Void sink node).
+   ox/oy are offsets of the rect's top-left relative to the group's origin. */
+function _computeSpreadPorts(edgeList, coords, W, H, nodeSizes = {}) {
+  const MARGIN = 12;
+  const nw  = n => nodeSizes[n]?.w  ?? W;
+  const nh  = n => nodeSizes[n]?.h  ?? H;
+  // Adjust group origin → visual rect top-left for a node.
+  const adj = (nc, n) => ({
+    x: nc.x + (nodeSizes[n]?.ox ?? 0),
+    y: nc.y + (nodeSizes[n]?.oy ?? 0),
+  });
 
-  // 1. Determine port sides for every edge.
+  // 1. Determine port sides for every edge (using actual visual rect positions).
   const infos = [];
   for (const { key, from, to } of edgeList) {
     const fc = coords[from], tc = coords[to];
     if (!fc || !tc) continue;
-    const { fromSide, toSide } = _portSides(fc, W, H, tc, W, H);
-    infos.push({ key, from, to, fc, tc, fromSide, toSide });
+    const afc = adj(fc, from), atc = adj(tc, to);
+    const { fromSide, toSide } = _portSides(afc, nw(from), nh(from), atc, nw(to), nh(to));
+    infos.push({ key, from, to, fc: afc, tc: atc, fromSide, toSide });
   }
 
-  // 2. Group by (node, side).
-  //    Each slot records: the edge key, which end ('from'|'to') is on this node,
-  //    and the other node's center (for sort ordering).
+  // 2. Group by (node, side) — each slot records the edge key, which end is on
+  //    this node, and the other node's center (for sort ordering).
   const groups = {}; // `${node}:${side}` → [{key, role, sortVal}]
-  const add = (node, side, key, role, otherCoords) => {
+  const add = (node, side, key, role, otherNode, otherCoords) => {
     const k = `${node}:${side}`;
     if (!groups[k]) groups[k] = [];
     const isHoriz = side === 'N' || side === 'S';
     const sortVal = isHoriz
-      ? otherCoords.x + W / 2   // sort left→right by other node center-x
-      : otherCoords.y + H / 2;  // sort top→bottom by other node center-y
+      ? otherCoords.x + nw(otherNode) / 2   // sort left→right by other node center-x
+      : otherCoords.y + nh(otherNode) / 2;  // sort top→bottom by other node center-y
     groups[k].push({ key, role, sortVal });
   };
   for (const ei of infos) {
-    add(ei.from, ei.fromSide, ei.key, 'from', ei.tc);
-    add(ei.to,   ei.toSide,   ei.key, 'to',   ei.fc);
+    add(ei.from, ei.fromSide, ei.key, 'from', ei.to,   ei.tc);
+    add(ei.to,   ei.toSide,   ei.key, 'to',   ei.from, ei.fc);
   }
 
   // 3. Sort each group and assign evenly-spaced positions along the side.
@@ -3031,22 +3042,22 @@ function _computeSpreadPorts(edgeList, coords, W, H) {
     const [node, side] = k.split(':');
     const nc = coords[node];
     if (!nc) continue;
+    const anc = adj(nc, node);
+    const nW = nw(node), nH = nh(node);
     entries.sort((a, b) => a.sortVal - b.sortVal);
     const n = entries.length;
     entries.forEach((e, i) => {
       let x, y;
       if (side === 'N' || side === 'S') {
-        // spread along x
         x = n === 1
-          ? nc.x + W / 2
-          : nc.x + MARGIN + (W - 2 * MARGIN) / (n - 1) * i;
-        y = side === 'S' ? nc.y + H : nc.y;
+          ? anc.x + nW / 2
+          : anc.x + MARGIN + (nW - 2 * MARGIN) / (n - 1) * i;
+        y = side === 'S' ? anc.y + nH : anc.y;
       } else {
-        // spread along y
-        x = side === 'E' ? nc.x + W : nc.x;
+        x = side === 'E' ? anc.x + nW : anc.x;
         y = n === 1
-          ? nc.y + H / 2
-          : nc.y + MARGIN + (H - 2 * MARGIN) / (n - 1) * i;
+          ? anc.y + nH / 2
+          : anc.y + MARGIN + (nH - 2 * MARGIN) / (n - 1) * i;
       }
       pts[`${e.key}:${e.role}`] = { x, y };
     });
@@ -3085,7 +3096,7 @@ function _redrawEdgesForNode(stageName) {
 
   // Recompute spread positions for ALL edges (a dragged node affects its
   // neighbours' spread too, so we always recompute the full set).
-  const spreadMap = _computeSpreadPorts(_grEdgeList, _grNodeCoords, W, H);
+  const spreadMap = _computeSpreadPorts(_grEdgeList, _grNodeCoords, W, H, _grNodeSizes);
 
   // BFS from the dragged node to find every node whose port-spread may have
   // changed.  Dragging A re-sorts B's port group, which can shift B→D and
@@ -3561,17 +3572,14 @@ async function renderGraphView() {
             const cr = await fetch(`/api/file/${encodeURIComponent(pipeline)}/${encodeURIComponent(stage)}/build?path=${encodeURIComponent(f.path)}`);
             if (!cr.ok) continue;
             const { content = '' } = await cr.json();
-            const m = content.match(/```env\s+([\s\S]*?)```/);
-            if (m) {
-              const tm = m[1].match(/^TARGET\s*=\s*(.+)$/m);
-              if (tm) {
-                const extM = f.name.match(/\.(\w+)$/);
-                const ext = extM ? '.' + extM[1] : '';
-                const aliasM = m[1].match(/^ALIAS\s*=\s*(.+)$/m);
-                const isMain = aliasM ? aliasM[1].trim() === 'main' : false;
-                edges.push({ from: stage, file: f.name, to: tm[1].trim(), ext, isMain });
-              }
-            }
+            const extM  = f.name.match(/\.(\w+)$/);
+            const ext   = extM ? '.' + extM[1] : '';
+            const m     = content.match(/```env\s+([\s\S]*?)```/);
+            const tm    = m && m[1].match(/^TARGET\s*=\s*(.+)$/m);
+            const target  = tm ? tm[1].trim() : 'Void';
+            const aliasM  = m && m[1].match(/^ALIAS\s*=\s*(.+)$/m);
+            const isMain  = aliasM ? aliasM[1].trim() === 'main' : false;
+            edges.push({ from: stage, file: f.name, to: target, ext, isMain });
           } catch { /**/ }
         }
       } catch { /**/ }
@@ -3583,6 +3591,18 @@ async function renderGraphView() {
   if (!stages.length) {
     container.innerHTML = '<div class="gr-empty">No stages found.</div>';
     return;
+  }
+
+  // Inject a synthetic "Void" sink for any edges whose target stage doesn't exist.
+  const _stageSet  = new Set(stages);
+  const _needsVoid = edges.some(e => !_stageSet.has(e.to));
+  // Void node dimensions — square, centred within the standard W×H layout cell.
+  const VS  = 80;
+  const vOx = (_GR.W - VS) / 2, vOy = (_GR.H - VS) / 2;
+  _grNodeSizes = _needsVoid ? { Void: { w: VS, h: VS, ox: vOx, oy: vOy } } : {};
+  if (_needsVoid) {
+    edges  = edges.map(e => _stageSet.has(e.to) ? e : { ...e, to: 'Void' });
+    stages = [...stages, 'Void'];
   }
 
   let { coords, flow, self, totalW, totalH } = _layoutDag(stages, edges);
@@ -3668,7 +3688,7 @@ async function renderGraphView() {
     const { from, to } = edgeMap.get(key);
     return { key, from, to };
   });
-  const _spreadMap = _computeSpreadPorts(_grEdgeList, coords, W, H);
+  const _spreadMap = _computeSpreadPorts(_grEdgeList, coords, W, H, _grNodeSizes);
 
   for (const [key, { from, to, files, fileInfos }] of edgeMap.entries()) {
     const sp  = _spreadMap.get(key);
@@ -3907,6 +3927,39 @@ async function renderGraphView() {
   for (const s of stages) {
     const c = coords[s];
     if (!c) continue;
+
+    // ── Void sink node — square, dimmed, dashed, draggable ───────
+    if (s === 'Void') {
+      // VS / vOx / vOy are hoisted from the Void injection block above.
+      const vg = mkS('g', { transform: `translate(${c.x},${c.y})`,
+        class: 'gr-node gr-void-node', 'data-stage': 'Void' });
+      const vRect = mkS('rect', { x: vOx, y: vOy, width: VS, height: VS, rx: 7,
+        fill: 'var(--bg1)', stroke: 'var(--fg-dim)', 'stroke-width': 1.5,
+        'stroke-dasharray': '6 3', opacity: 0.55,
+        class: 'gr-node-rect', style: 'cursor:grab' });
+      const vTxt = mkS('text', { x: vOx + VS / 2, y: vOy + VS / 2,
+        'text-anchor': 'middle', 'dominant-baseline': 'middle',
+        'font-size': 14, 'font-weight': 600, fill: 'var(--fg-dim)',
+        opacity: 0.55, 'pointer-events': 'none' });
+      vTxt.textContent = 'Void';
+      vRect.addEventListener('mousedown', ev => {
+        if (ev.button !== 0) return;
+        ev.stopPropagation(); ev.preventDefault();
+        const nc = _grNodeCoords['Void'] || { x: c.x, y: c.y };
+        _nodeDrag = {
+          s: 'Void', g: vg,
+          startCX: ev.clientX, startCY: ev.clientY,
+          startNX: nc.x, startNY: nc.y,
+          popupOffsetX: 0, popupOffsetY: 0,
+        };
+        _nodeDragged = false;
+        vRect.style.cursor = 'grabbing';
+      });
+      vg.append(vRect, vTxt);
+      svg.appendChild(vg);
+      continue;
+    }
+
     const g = mkS('g', { transform: `translate(${c.x},${c.y})`, class: 'gr-node', 'data-stage': s });
 
     // Drop-shadow
@@ -4055,7 +4108,7 @@ async function renderGraphView() {
   canvas.appendChild(svg);
   _grCanvasEl   = canvas;
   _grSvgEl      = svg;
-  _grStages     = stages.slice();
+  _grStages     = stages.filter(s => s !== 'Void');  // Void is synthetic — exclude from interactions
   _grNodeCoords = Object.fromEntries(stages.map(s => [s, { ...coords[s] }]));
 
   /* ── Pan & zoom ──────────────────────────────────────────────── */
@@ -4086,7 +4139,7 @@ async function renderGraphView() {
     e.preventDefault();
 
     const stageName = nodeG.dataset.stage;
-    if (!stageName) return;
+    if (!stageName || stageName === 'Void') return;
 
     // Build context menu exactly as stage-header right-click
     const ctx = $('ctx-menu');
