@@ -1,4 +1,4 @@
-"""Purge router - delete generated files from stage or pipeline repo/out dirs."""
+"""Purge router - move generated files to Recycle-Bin instead of deleting."""
 import shutil
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
@@ -12,33 +12,40 @@ def _pipeline_dir(pipeline: str) -> Path:
 
 
 def _purge_stage(stage_dir: Path):
-    """Delete all files in stage/repo/ (keep .gitignore). Leaves out/ intact."""
+    """Move all files in stage/repo/ (except .gitignore) to pipeline/Recycle-Bin/repo/."""
+    from .workspace import _recycle_bin_repo, _move_to_recycle
     repo = stage_dir / "repo"
-    if repo.is_dir():
-        for item in repo.iterdir():
-            if item.name == ".gitignore":
-                continue
-            if item.is_dir():
-                shutil.rmtree(item)
-            else:
-                item.unlink()
+    if not repo.is_dir():
+        return
+    pipe_dir = stage_dir.parent
+    rb = _recycle_bin_repo(pipe_dir)
+    for item in repo.iterdir():
+        if item.name == ".gitignore":
+            continue
+        _move_to_recycle(item, rb)
 
 
 @router.post("/api/purge-out/{pipeline}/{stage}")
 async def purge_stage_out(pipeline: str, stage: str):
-    """Purge only the out/ directory of a stage."""
+    """Move stage/out/ into pipeline/Recycle-Bin/repo/ (renamed to <stage>__out)."""
+    from .workspace import _recycle_bin_repo, _move_to_recycle
     stage_dir = _pipeline_dir(pipeline) / stage
     if not stage_dir.is_dir():
         raise HTTPException(404, f"Stage not found: {pipeline}/{stage}")
     out = stage_dir / "out"
     if out.is_dir():
-        shutil.rmtree(out)
+        rb = _recycle_bin_repo(_pipeline_dir(pipeline))
+        # Rename to <stage>__out so multiple stages don't collide in the bin.
+        dest = rb / f"{stage}__out"
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.move(str(out), str(dest))
     return {"ok": True, "purged": f"{pipeline}/{stage}/out"}
 
 
 @router.post("/api/purge/{pipeline}/{stage}")
 async def purge_stage(pipeline: str, stage: str):
-    """Purge a single stage: wipe repo/ contents and remove out/."""
+    """Move a stage's repo/ contents (except .gitignore) to pipeline/Recycle-Bin/repo/."""
     stage_dir = _pipeline_dir(pipeline) / stage
     if not stage_dir.is_dir():
         raise HTTPException(404, f"Stage not found: {pipeline}/{stage}")
@@ -48,7 +55,7 @@ async def purge_stage(pipeline: str, stage: str):
 
 @router.post("/api/purge/{pipeline}")
 async def purge_pipeline(pipeline: str):
-    """Purge every stage in a pipeline."""
+    """Move every stage's repo/ contents in a pipeline to pipeline/Recycle-Bin/repo/."""
     pipe_dir = _pipeline_dir(pipeline)
     if not pipe_dir.is_dir():
         raise HTTPException(404, f"Pipeline not found: {pipeline}")

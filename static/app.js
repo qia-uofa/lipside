@@ -1713,11 +1713,13 @@ $('ctx-menu').addEventListener('click', async e => {
     case 'rename':          promptRename(stageName, path, view); break;
     case 'move':            promptMove(stageName, path, view); break;
     case 'delete':          confirmDelete(stageName, path, view); break;
-    case 'purge-stage':     openPurgeStageModal(stageName); break;
-    case 'rename-stage':    promptRenameStage(stageName); break;
-    case 'delete-stage':    openDeleteStageModal(stageName); break;
-    case 'paste-clipboard': pasteFromClipboard(stageName, basePath); break;
-    case 'gr-new-stage':    openStagesModal(); break;
+    case 'purge-stage':          openPurgeStageModal(stageName); break;
+    case 'rename-stage':         promptRenameStage(stageName); break;
+    case 'delete-stage':         openDeleteStageModal(stageName); break;
+    case 'paste-clipboard':      pasteFromClipboard(stageName, basePath); break;
+    case 'gr-new-stage':         openStagesModal(); break;
+    case 'gr-purge-upstream':    openPurgeUpstreamModal(stageName); break;
+    case 'gr-purge-downstream':  openPurgeDownstreamModal(stageName); break;
     case 'run-build':       runBuild(stageName); break;
     case 'run-build-file':  runBuild(stageName, path.replace(/\.[^.]+$/, '')); break;
   }
@@ -2334,7 +2336,7 @@ $('btn-submit-messages').addEventListener('click', async () => {
 let _purgeAction = null;
 
 function openPurgeOutModal(stageName) {
-  $('purge-msg').textContent = `Clear out/ for stage "${stageName}"? This removes all generated output files.`;
+  $('purge-msg').textContent = `Clear out/ for stage "${stageName}"? Output files will be moved to the Recycle-Bin.`;
   _purgeAction = async () => {
     const res = await fetch(
       `/api/purge-out/${encodeURIComponent(state.currentPipeline)}/${encodeURIComponent(stageName)}`,
@@ -2347,7 +2349,7 @@ function openPurgeOutModal(stageName) {
 }
 
 function openPurgeStageModal(stageName) {
-  $('purge-msg').textContent = `Purge stage "${stageName}"? This deletes all files in repo/ (out/ is preserved).`;
+  $('purge-msg').textContent = `Purge stage "${stageName}"? Repo files will be moved to the Recycle-Bin (out/ is preserved).`;
   _purgeAction = async () => {
     const res = await fetch(
       `/api/purge/${encodeURIComponent(state.currentPipeline)}/${encodeURIComponent(stageName)}`,
@@ -2361,7 +2363,7 @@ function openPurgeStageModal(stageName) {
 
 function openPurgePipelineModal() {
   if (!state.currentPipeline) { appAlert('Select a pipeline first'); return; }
-  $('purge-msg').textContent = `Purge entire pipeline "${state.currentPipeline}"? All stage repo/ contents will be deleted (out/ dirs preserved).`;
+  $('purge-msg').textContent = `Purge entire pipeline "${state.currentPipeline}"? All stage repo/ contents will be moved to the Recycle-Bin (out/ dirs preserved).`;
   _purgeAction = async () => {
     const res = await fetch(
       `/api/purge/${encodeURIComponent(state.currentPipeline)}`,
@@ -2369,6 +2371,74 @@ function openPurgePipelineModal() {
     );
     if (!res.ok) throw new Error(await res.text());
     await renderTree();
+  };
+  $('purge-modal').classList.remove('hidden');
+}
+
+/* ── Graph traversal helpers ──────────────────────────────────────────────── */
+
+/** BFS upstream (follow edges backward: find all stages that feed into `start`). */
+function _graphUpstream(start) {
+  const visited = new Set();
+  const queue   = [start];
+  while (queue.length) {
+    const node = queue.shift();
+    if (visited.has(node)) continue;
+    visited.add(node);
+    for (const { from, to } of _grEdgeList)
+      if (to === node && !visited.has(from)) queue.push(from);
+  }
+  visited.delete(start);
+  return [...visited];
+}
+
+/** BFS downstream (follow edges forward: find all stages that `start` feeds into). */
+function _graphDownstream(start) {
+  const visited = new Set();
+  const queue   = [start];
+  while (queue.length) {
+    const node = queue.shift();
+    if (visited.has(node)) continue;
+    visited.add(node);
+    for (const { from, to } of _grEdgeList)
+      if (from === node && !visited.has(to)) queue.push(to);
+  }
+  visited.delete(start);
+  return [...visited];
+}
+
+function openPurgeUpstreamModal(stageName) {
+  const targets = [stageName, ..._graphUpstream(stageName)];
+  $('purge-msg').textContent =
+    `Purge ${targets.length} stage(s) (self + upstream) of "${stageName}"? ` +
+    `(${targets.join(', ')}) — repo files will be moved to the Recycle-Bin.`;
+  _purgeAction = async () => {
+    for (const s of targets) {
+      const res = await fetch(
+        `/api/purge/${encodeURIComponent(state.currentPipeline)}/${encodeURIComponent(s)}`,
+        { method: 'POST' }
+      );
+      if (!res.ok) throw new Error(await res.text());
+    }
+    await refreshGraphView();
+  };
+  $('purge-modal').classList.remove('hidden');
+}
+
+function openPurgeDownstreamModal(stageName) {
+  const targets = [stageName, ..._graphDownstream(stageName)];
+  $('purge-msg').textContent =
+    `Purge ${targets.length} stage(s) (self + downstream) of "${stageName}"? ` +
+    `(${targets.join(', ')}) — repo files will be moved to the Recycle-Bin.`;
+  _purgeAction = async () => {
+    for (const s of targets) {
+      const res = await fetch(
+        `/api/purge/${encodeURIComponent(state.currentPipeline)}/${encodeURIComponent(s)}`,
+        { method: 'POST' }
+      );
+      if (!res.ok) throw new Error(await res.text());
+    }
+    await refreshGraphView();
   };
   $('purge-modal').classList.remove('hidden');
 }
@@ -4033,8 +4103,10 @@ async function renderGraphView() {
     ctx.appendChild(_ctxSep());
     ctx.appendChild(_ctxItem('\u25B6 Build', 'run-build'));
     ctx.appendChild(_ctxSep());
-    ctx.appendChild(_ctxItem('Purge Stage...', 'purge-stage', true));
-    ctx.appendChild(_ctxItem('Delete Stage...', 'delete-stage', true));
+    ctx.appendChild(_ctxItem('Purge Stage\u2026', 'purge-stage', true));
+    ctx.appendChild(_ctxItem('Purge Upstream\u2026', 'gr-purge-upstream', true));
+    ctx.appendChild(_ctxItem('Purge Downstream\u2026', 'gr-purge-downstream', true));
+    ctx.appendChild(_ctxItem('Delete Stage\u2026', 'delete-stage', true));
 
     ctx.classList.remove('hidden');
     ctx.style.left = e.clientX + 'px';

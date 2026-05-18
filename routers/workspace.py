@@ -1,9 +1,10 @@
 """Workspace router - pipelines, workspace-level .env, graph config."""
 import re, shutil
-import send2trash
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
+RECYCLE_BIN = "Recycle-Bin"
 
 router = APIRouter()
 _workspace: Path = Path(".").resolve()
@@ -239,25 +240,48 @@ async def rename_stage(pipeline: str, stage: str, body: RenameStageBody):
     return {"ok": True, "old_name": stage, "new_name": new_name, "updated_files": updated}
 
 
+# -- Recycle-bin helpers ------------------------------------------------------
+
+def _recycle_bin_repo(container_dir: Path) -> Path:
+    """Return the Recycle-Bin/repo dir under container_dir, creating it if needed."""
+    rb = container_dir / RECYCLE_BIN / "repo"
+    rb.mkdir(parents=True, exist_ok=True)
+    return rb
+
+
+def _move_to_recycle(src: Path, dest_dir: Path) -> None:
+    """Move src into dest_dir, overwriting any existing item with the same name."""
+    dest = dest_dir / src.name
+    if dest.exists():
+        shutil.rmtree(dest) if dest.is_dir() else dest.unlink()
+    shutil.move(str(src), str(dest))
+
+
 # -- Delete endpoints ---------------------------------------------------------
 
 @router.delete("/api/stage/{pipeline}/{stage}")
 async def delete_stage(pipeline: str, stage: str):
-    """Move a stage directory to the recycle bin."""
+    """Move a stage directory into pipeline/Recycle-Bin/repo/."""
     ws = get_workspace()
     stage_dir = ws / pipeline / stage
     if not stage_dir.is_dir():
         raise HTTPException(404, f"Stage not found: {pipeline}/{stage}")
-    send2trash.send2trash(str(stage_dir))
+    if stage == RECYCLE_BIN:
+        raise HTTPException(400, "Cannot delete the Recycle-Bin stage")
+    rb = _recycle_bin_repo(ws / pipeline)
+    _move_to_recycle(stage_dir, rb)
     return {"ok": True, "deleted": f"{pipeline}/{stage}"}
 
 
 @router.delete("/api/pipeline/{pipeline}")
 async def delete_pipeline(pipeline: str):
-    """Move an entire pipeline directory to the recycle bin."""
+    """Move an entire pipeline directory into workspace/Recycle-Bin/repo/."""
     ws = get_workspace()
     pipe_dir = ws / pipeline
     if not pipe_dir.is_dir():
         raise HTTPException(404, f"Pipeline not found: {pipeline}")
-    send2trash.send2trash(str(pipe_dir))
+    if pipeline == RECYCLE_BIN:
+        raise HTTPException(400, "Cannot delete the Recycle-Bin pipeline")
+    rb = _recycle_bin_repo(ws)
+    _move_to_recycle(pipe_dir, rb)
     return {"ok": True, "deleted": pipeline}
