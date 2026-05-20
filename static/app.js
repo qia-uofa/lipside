@@ -7,9 +7,6 @@
 /* ── helpers ──────────────────────────────────────────────────────── */
 const $ = id => document.getElementById(id);
 
-// DEBUG: confirm script loaded - remove once working
-window.__LIPSIDE_LOADED__ = true;
-console.log('[LIPSIDE] app.js executing');
 
 /* ── In-app dialog helpers (replace native prompt/alert/confirm) ── */
 /* appPromptExt — like appPrompt but appends an extension <select> below the input.
@@ -510,28 +507,7 @@ async function selectPipeline(name) {
 /* Sort stages in pipeline flow order using graphData.
    graphData[stage][file] = target → pipeline flow: target → stage */
 function _topoSortStages(stages) {
-  if (stages.length < 2) return stages;
-  const stageSet = new Set(stages);
-  const succ = Object.fromEntries(stages.map(s => [s, []]));
-  const pred = Object.fromEntries(stages.map(s => [s, []]));
-  for (const stage of stages) {
-    for (const target of Object.values({})) {
-      if (stageSet.has(target) && target !== stage) {
-        if (!succ[stage].includes(target)) succ[stage].push(target);   // stage → target ✓
-        if (!pred[target].includes(stage)) pred[target].push(stage);   // target depends on stage ✓
-      }
-    }
-  }
-  const inDeg = Object.fromEntries(stages.map(s => [s, pred[s].length]));
-  const q = stages.filter(s => inDeg[s] === 0);
-  const topo = [];
-  while (q.length) {
-    q.sort((a, b) => stages.indexOf(a) - stages.indexOf(b));
-    const n = q.shift(); topo.push(n);
-    for (const c of succ[n]) if (--inDeg[c] === 0) q.push(c);
-  }
-  for (const s of stages) if (!topo.includes(s)) topo.push(s);
-  return topo;
+  return [...stages];
 }
 
 async function renderTree() {
@@ -852,7 +828,6 @@ function renderFilesInto(container, stageName, files, parentPath, depth) {
       return ac !== bc ? ac - bc : a.name.localeCompare(b.name);
     });
   }
-  const stageGraph = {};
   const dirPL  = _TREE_BASE + depth * _TREE_LEVEL;
   const filePL = dirPL + _TREE_LEVEL;          // aligned past arrow area
 
@@ -897,12 +872,6 @@ function renderFilesInto(container, stageName, files, parentPath, depth) {
       const nameGroup = el('div', 'file-name-group');
       nameGroup.appendChild(nameSpan);
 
-      // target label right next to filename
-      const tgt = stageGraph[f.name];
-      if (tgt) {
-        nameGroup.appendChild(el('span', 'file-target-label',
-          tgt === stageName ? '↺' : '→ ' + tgt));
-      }
       item.append(iconEl, nameGroup);
 
       // run button
@@ -1258,8 +1227,6 @@ async function closeTab(idx) {
   activateTab(Math.min(idx, state.tabs.length - 1));
 }
 
-// DEBUG: confirm listeners being registered
-console.log('[LIPSIDE] registering listeners');
 
 $('tab-bar').addEventListener('click', e => {
   const tab = e.target.closest('.tab');

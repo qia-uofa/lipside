@@ -1,5 +1,5 @@
 """Terminal router – WebSocket PTY."""
-import asyncio, os, sys, shlex
+import asyncio, os, sys
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 router = APIRouter()

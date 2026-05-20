@@ -1,5 +1,5 @@
 """Build router – WebSocket streaming for lips build."""
-import asyncio, json, shlex
+import asyncio, json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 router = APIRouter()

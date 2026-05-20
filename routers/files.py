@@ -1,5 +1,5 @@
 """Files router – CRUD for pipeline stage files."""
-import os, sys, shutil, subprocess, base64, io
+import sys, shutil, subprocess, base64
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
