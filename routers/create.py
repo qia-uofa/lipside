@@ -1,5 +1,5 @@
 """Create router - pipeline scaffolding and stage management."""
-import json, re
+import json
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -525,9 +525,7 @@ async def create_pipeline(body: CreatePipelineBody):
                 skipped.append(f"{name}/build/{build_file}")
                 continue
 
-            if is_final:
-                pass
-            else:
+            if not is_final:
                 next_stage = stages[i + 1].get("name", "").strip() if i + 1 < len(stages) else ""
                 if bf_path.suffix == ".py":
                     content = (
