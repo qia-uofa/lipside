@@ -93,7 +93,13 @@ PROVIDERS = [
          "command-r-plus", "command-r",
      ]},
     {"id": "deepseek", "name": "DeepSeek", "prefix": "deepseek",
-     "models": ["deepseek-chat", "deepseek-reasoner", "deepseek-coder"]},
+     "models": [
+        "deepseek-chat", 
+        "deepseek-reasoner", 
+        "deepseek-coder",
+        "deepseek-v4-pro",
+        "deepseek-v4-flash"
+        ]},
     {"id": "perplexity", "name": "Perplexity AI", "prefix": "perplexity",
      "models": [
          "sonar-pro", "sonar", "sonar-reasoning-pro", "sonar-reasoning",

@@ -194,6 +194,21 @@ html, body {
 .view-tab:hover { background: var(--bg3); color: var(--fg); }
 .view-tab.active { background: var(--accent); color: #fff; }
 
+#session-clock {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--fg-dim);
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 7px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: color .3s, border-color .3s;
+}
+#session-clock.warn { color: var(--yellow); border-color: var(--yellow); }
+#session-clock.urgent { color: var(--red); border-color: var(--red); }
+
 #workspace-path {
   color: var(--fg-dim);
   font-size: 11px;

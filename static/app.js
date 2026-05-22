@@ -704,6 +704,7 @@ function handleTreeContextMenu(e) {
     ctx.appendChild(_ctxItem('New File', 'new-file'));
     ctx.appendChild(_ctxItem('New Folder', 'new-folder'));
     ctx.appendChild(_ctxItem('\uD83D\uDCCB Paste from Clipboard', 'paste-clipboard'));
+    ctx.appendChild(_ctxItem('\u2191 Upload File(s)...', 'upload-files'));
     ctx.appendChild(_ctxSep());
     ctx.appendChild(_ctxItem('\uD83D\uDCC4 Open in Terminal', 'open-terminal'));
     ctx.appendChild(_ctxSep());
@@ -720,6 +721,7 @@ function handleTreeContextMenu(e) {
     ctx.appendChild(_ctxItem('New File', 'new-file'));
     ctx.appendChild(_ctxItem('New Folder', 'new-folder'));
     ctx.appendChild(_ctxItem('\uD83D\uDCCB Paste from Clipboard', 'paste-clipboard'));
+    ctx.appendChild(_ctxItem('\u2191 Upload File(s)...', 'upload-files'));
     ctx.appendChild(_ctxSep());
     ctx.appendChild(_ctxItem('\uD83D\uDCC4 Open in Terminal', 'open-terminal'));
     ctx.appendChild(_ctxSep());
@@ -1413,6 +1415,7 @@ function handleMenuAction(action, dataset) {
     case 'new-file-here':      promptNewFile(); break;
     case 'new-folder-here':    promptNewFolder(); break;
     case 'paste-clipboard':    pasteFromClipboard(); break;
+    case 'upload-files':       uploadFiles(); break;
     case 'find':               cmFind(); break;
     case 'replace':            cmReplace(); break;
     case 'go-to-line':         cmGoToLine(); break;
@@ -1444,6 +1447,41 @@ async function pasteFromClipboard(stageName, basePath) {
     await refreshStageFiles(stageName);
     openFile(stageName, relPath);
   } catch(e) { await appAlert(e.message); }
+}
+
+/* ---- upload files ---- */
+async function uploadFiles(stageName, basePath, viewHint) {
+  stageName = stageName || getActiveStage();
+  if (!stageName) { await appAlert('Select a stage first'); return; }
+  const view = (viewHint && viewHint !== 'graph') ? viewHint : state.viewMode;
+
+  await new Promise(resolve => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.onchange = async () => {
+      const files = Array.from(input.files);
+      if (!files.length) { resolve(); return; }
+      const form = new FormData();
+      files.forEach(f => form.append('files', f));
+      const params = new URLSearchParams();
+      if (basePath) params.set('subpath', basePath);
+      try {
+        const res = await fetch(
+          `/api/upload/${encodeURIComponent(state.currentPipeline)}/${encodeURIComponent(stageName)}/${view}` +
+          (basePath ? `?${params}` : ''),
+          { method: 'POST', body: form }
+        );
+        if (!res.ok) { await appAlert('Upload failed: ' + (await res.text())); resolve(); return; }
+        const data = await res.json();
+        await refreshStageFiles(stageName);
+        if (data.saved && data.saved.length === 1) openFile(stageName, data.saved[0]);
+      } catch(e) { await appAlert('Upload error: ' + e.message); }
+      resolve();
+    };
+    input.oncancel = () => resolve();
+    input.click();
+  });
 }
 
 /* ---- run all stages in topological order ---- */
@@ -1684,6 +1722,7 @@ $('ctx-menu').addEventListener('click', async e => {
     case 'rename-stage':         promptRenameStage(stageName); break;
     case 'delete-stage':         openDeleteStageModal(stageName); break;
     case 'paste-clipboard':      pasteFromClipboard(stageName, basePath); break;
+    case 'upload-files':         uploadFiles(stageName, basePath, view); break;
     case 'gr-new-stage':         openStagesModal(); break;
     case 'gr-purge-upstream':    openPurgeUpstreamModal(stageName); break;
     case 'gr-purge-downstream':  openPurgeDownstreamModal(stageName); break;
@@ -4183,6 +4222,54 @@ function showModalErr(id, msg) {
 }
 
 
+
+/* ═══════════════════════════════════════════════════════════════
+   SESSION COUNTDOWN CLOCK
+   ═══════════════════════════════════════════════════════════════ */
+(function initSessionClock() {
+  const el = $('session-clock');
+  let expiresAt = null;
+  let ticker = null;
+
+  function fmt(secs) {
+    if (secs <= 0) return '0:00';
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    return `${m}:${String(s).padStart(2,'0')}`;
+  }
+
+  function tick() {
+    const remaining = Math.max(0, Math.round(expiresAt - Date.now() / 1000));
+    el.textContent = fmt(remaining);
+    el.classList.toggle('urgent', remaining <= 60);
+    el.classList.toggle('warn', remaining > 60 && remaining <= 300);
+    if (remaining === 0) {
+      clearInterval(ticker);
+      window.location.reload();
+    }
+  }
+
+  async function fetchSession() {
+    try {
+      const res = await fetch('/session');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.passkey_user || !data.expires_at) {
+        el.classList.add('hidden');
+        return;
+      }
+      expiresAt = data.expires_at;
+      el.classList.remove('hidden');
+      tick();
+      if (!ticker) ticker = setInterval(tick, 1000);
+    } catch (_) {}
+  }
+
+  fetchSession();
+  setInterval(fetchSession, 60000);
+})();
 
 /* ═══════════════════════════════════════════════════════════════
    INIT
