@@ -83,6 +83,17 @@ app.include_router(config.router)
 app.include_router(purge.router)
 app.include_router(terminal.router)
 
+@app.get("/session")
+async def session_info(request: Request):
+    client_ip = request.client.host if request.client else None
+    if client_ip in auth.ALLOWED_IPS or "0.0.0.0" in auth.ALLOWED_IPS:
+        return JSONResponse({"passkey_user": False})
+    expiry = auth.UNLOCKED_IPS.get(client_ip)
+    if expiry and expiry > time.time():
+        return JSONResponse({"passkey_user": True, "expires_at": expiry})
+    return JSONResponse({"passkey_user": False})
+
+
 @app.get("/")
 async def index():
     content = (BASE / "static" / "index.html").read_bytes()

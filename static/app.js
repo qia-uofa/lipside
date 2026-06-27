@@ -1,8 +1,9 @@
 /* ═══════════════════════════════════════════════════════════════════
-   LIPSIDE app.js  –  V3
+   LIPSIDE app.js  –  V3.1 (unpinned tabs)
    ═══════════════════════════════════════════════════════════════════ */
 
 'use strict';
+console.log('[LIPSIDE] app.js V3.1 loaded');
 
 /* ── helpers ──────────────────────────────────────────────────────── */
 const $ = id => document.getElementById(id);
@@ -104,7 +105,8 @@ const el = (tag, cls, txt) => {
 /* ── state ────────────────────────────────────────────────────────── */
 const state = {
   workspace: '',
-  pipelines: [],
+  pipelines: [],       // array of pipeline name strings
+  pipelineObjects: [], // full objects [{name, stages}] from the API
   currentPipeline: null,
   viewMode: 'graph',
   sidebarVisible: true,
@@ -137,7 +139,7 @@ let _cmLoading = false;  // true while setValue() is running; suppresses spuriou
 /* ═══════════════════════════════════════════════════════════════════
    BUILD OUTPUT PANEL
    ═══════════════════════════════════════════════════════════════════ */
-let _outputVisible = true;
+let _outputVisible = false;
 let _buildWs = null;       // currently active build WebSocket
 let _buildQueue = [];      // [{stageName, script}] pending
 let _buildRunning = false; // is a build currently executing
@@ -582,6 +584,8 @@ async function renderTree() {
 
   tree.removeEventListener('click', handleTreeClick);
   tree.addEventListener('click', handleTreeClick);
+  tree.removeEventListener('dblclick', handleTreeDblClick);
+  tree.addEventListener('dblclick', handleTreeDblClick);
   tree.removeEventListener('contextmenu', handleTreeContextMenu);
   tree.addEventListener('contextmenu', handleTreeContextMenu);
 }
@@ -656,9 +660,16 @@ function handleTreeClick(e) {
   const fileItem = e.target.closest('.file-item');
   if (fileItem) {
     _focusedCtx = { type: 'file', stageName: fileItem.dataset.stage, path: fileItem.dataset.path, view: state.viewMode, isDir: false };
-    openFile(fileItem.dataset.stage, fileItem.dataset.path);
+    openFile(fileItem.dataset.stage, fileItem.dataset.path, null, false);
     return;
   }
+}
+
+function handleTreeDblClick(e) {
+  const fileItem = e.target.closest('.file-item');
+  if (!fileItem) return;
+  // Promote the unpinned tab that just opened via the preceding click events
+  openFile(fileItem.dataset.stage, fileItem.dataset.path, null, true);
 }
 
 function _ctxItem(label, action, danger = false) {
@@ -704,6 +715,7 @@ function handleTreeContextMenu(e) {
     ctx.appendChild(_ctxItem('New File', 'new-file'));
     ctx.appendChild(_ctxItem('New Folder', 'new-folder'));
     ctx.appendChild(_ctxItem('\uD83D\uDCCB Paste from Clipboard', 'paste-clipboard'));
+    ctx.appendChild(_ctxItem('\u2191 Upload File(s)...', 'upload-files'));
     ctx.appendChild(_ctxSep());
     ctx.appendChild(_ctxItem('\uD83D\uDCC4 Open in Terminal', 'open-terminal'));
     ctx.appendChild(_ctxSep());
@@ -720,6 +732,7 @@ function handleTreeContextMenu(e) {
     ctx.appendChild(_ctxItem('New File', 'new-file'));
     ctx.appendChild(_ctxItem('New Folder', 'new-folder'));
     ctx.appendChild(_ctxItem('\uD83D\uDCCB Paste from Clipboard', 'paste-clipboard'));
+    ctx.appendChild(_ctxItem('\u2191 Upload File(s)...', 'upload-files'));
     ctx.appendChild(_ctxSep());
     ctx.appendChild(_ctxItem('\uD83D\uDCC4 Open in Terminal', 'open-terminal'));
     ctx.appendChild(_ctxSep());
@@ -931,14 +944,35 @@ function tabKey(pipeline, stage, view, path) {
   return `${pipeline}|${stage}|${view}|${path}`;
 }
 
-async function openFile(stageName, filePath, viewOverride = null) {
+async function openFile(stageName, filePath, viewOverride = null, pinned = true) {
   const _v = viewOverride || state.viewMode;
   const view = (_v === 'graph') ? 'repo' : _v;
   const pipeline = state.currentPipeline;
   const key      = tabKey(pipeline, stageName, view, filePath);
 
   const existing = state.tabs.findIndex(t => t.key === key);
-  if (existing !== -1) { activateTab(existing); return; }
+  if (existing !== -1) {
+    // Double-click on an already-open unpinned tab promotes it
+    if (pinned && !state.tabs[existing].pinned) {
+      state.tabs[existing].pinned = true;
+      renderTabBar();
+      $('btn-pin-tab')?.classList.add('hidden');
+    }
+    activateTab(existing);
+    return;
+  }
+
+  // For unpinned: evict the existing unmodified unpinned tab (if any) before inserting
+  if (!pinned) {
+    const unpinnedIdx = state.tabs.findIndex(t => t.pinned === false);
+    if (unpinnedIdx !== -1 && !state.tabs[unpinnedIdx].modified) {
+      state.tabs.splice(unpinnedIdx, 1);
+      if (state.activeTab !== null) {
+        if (state.activeTab > unpinnedIdx) state.activeTab--;
+        else if (state.activeTab === unpinnedIdx) state.activeTab = null;
+      }
+    }
+  }
 
   try {
     const res = await fetch(
@@ -948,19 +982,31 @@ async function openFile(stageName, filePath, viewOverride = null) {
     const data = await res.json();
 
     const fname = filePath.split('/').pop();
-    state.tabs.push({
+    const newTab = {
       key, pipeline, stage: stageName, view,
       path: filePath,
       label: `${fname}@${stageName}`,
       _fname: fname,
       content: data.content || '',
+      cleanContent: data.content || '',
       file_type: data.file_type || 'text',
       readonly: data.readonly || false,
       data_url: data.data_url || null,
       modified: false,
-    });
-    renderTabBar();
-    activateTab(state.tabs.length - 1);
+      pinned,
+    };
+
+    if (!pinned) {
+      // Insert at leftmost position
+      state.tabs.unshift(newTab);
+      if (state.activeTab !== null) state.activeTab++; // shift existing active idx
+      renderTabBar();
+      activateTab(0);
+    } else {
+      state.tabs.push(newTab);
+      renderTabBar();
+      activateTab(state.tabs.length - 1);
+    }
     await expandStage(stageName);  // make sure the stage is visible in the sidebar
   } catch(e) {
     console.error('openFile error', e);
@@ -971,14 +1017,16 @@ function renderTabBar() {
   const bar = $('tab-bar');
   bar.innerHTML = '';
   state.tabs.forEach((tab, i) => {
-    const t = el('div', 'tab' + (i === state.activeTab ? ' active' : ''));
+    const isPinned = tab.pinned !== false;
+    const cls = 'tab' + (i === state.activeTab ? ' active' : '') + (!isPinned ? ' unpinned' : '');
+    const t = el('div', cls);
     t.dataset.idx = i;
     t.dataset.view = tab.view;
     t.draggable = true;
     if (tab._buildLocked) t.appendChild(el('span', 'tab-locked', '🔒'));
     else if (tab.modified) t.appendChild(el('span', 'tab-modified', '●'));
     t.appendChild(el('span', 'tab-name', tab.label));
-    t.appendChild(el('button', 'tab-close', '×'));
+    if (isPinned) t.appendChild(el('button', 'tab-close', '×'));
     bar.appendChild(t);
   });
 }
@@ -987,12 +1035,23 @@ function activateTab(idx) {
   // Flush unsaved editor content back into the outgoing tab before switching
   if (state.activeTab !== null && state.activeTab !== idx && cm) {
     const outgoing = state.tabs[state.activeTab];
-    if (outgoing && !outgoing.readonly && !outgoing._buildLocked) outgoing.content = cm.getValue();
+    if (outgoing && !outgoing.readonly && !outgoing._buildLocked) {
+      outgoing.content    = cm.getValue();
+      outgoing.cmHistory  = cm.getHistory();
+    }
+    // Auto-close outgoing unpinned tab if it has no unsaved changes
+    if (outgoing && outgoing.pinned === false && !outgoing.modified) {
+      const outIdx = state.activeTab;
+      state.tabs.splice(outIdx, 1);
+      if (idx > outIdx) idx--;
+      state.activeTab = null;
+    }
   }
   if (idx < 0 || idx >= state.tabs.length) {
     state.activeTab = null;
     showEmptyEditor();
     $('btn-toggle-preview').classList.add('hidden');
+    $('btn-pin-tab')?.classList.add('hidden');
     return;
   }
   state.activeTab = idx;
@@ -1004,6 +1063,9 @@ function activateTab(idx) {
   const ext = _tabFname.split('.').pop().toLowerCase();
   const isPreviewToggleable = (ext === 'md' || ext === 'markdown' || ext === 'html' || ext === 'uml') && !state.tabs[idx].readonly;
   $('btn-toggle-preview').classList.toggle('hidden', !isPreviewToggleable);
+
+  // Show pin button only for unpinned tabs
+  $('btn-pin-tab')?.classList.toggle('hidden', state.tabs[idx].pinned !== false);
 
   document.querySelectorAll('.file-item').forEach(el => {
     const t = state.tabs[idx];
@@ -1159,6 +1221,12 @@ function loadIntoEditor(tab) {
       if (state.activeTab === null) return;
       const t = state.tabs[state.activeTab];
       if (!t.modified) { t.modified = true; renderTabBar(); }
+      // Auto-promote unpinned → pinned on first edit
+      if (t.pinned === false) {
+        t.pinned = true;
+        renderTabBar();
+        $('btn-pin-tab')?.classList.add('hidden');
+      }
     });
   }
 
@@ -1166,14 +1234,23 @@ function loadIntoEditor(tab) {
   cm.setOption('readOnly', tab._buildLocked ? true : false);
 
   const modeMap = {
-    py: 'python', js: 'javascript', md: 'markdown',
-    sh: 'shell', bash: 'shell', txt: 'null',
-    json: 'javascript', yaml: 'yaml', yml: 'yaml',
+    py: 'python', pyw: 'python',
+    js: 'javascript', mjs: 'javascript', cjs: 'javascript',
+    ts: 'javascript', tsx: 'javascript',
+    md: 'markdown', markdown: 'markdown',
+    sh: 'shell', bash: 'shell', zsh: 'shell',
+    json: 'javascript', jsonc: 'javascript',
+    yaml: 'yaml', yml: 'yaml',
+    html: 'htmlmixed', htm: 'htmlmixed',
+    css: 'css', scss: 'css', sass: 'css', less: 'css',
+    xml: 'xml', svg: 'xml',
+    txt: null,
   };
   cm.setOption('mode', modeMap[ext] || 'null');
   _cmLoading = true;
   cm.setValue(tab.content);
   cm.clearHistory();
+  if (tab.cmHistory) cm.setHistory(tab.cmHistory);
   _cmLoading = false;
   cmPath  = tab.key;
   cmDirty = false;
@@ -1204,8 +1281,14 @@ async function saveActiveTab() {
       { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({content}) }
     );
     if (!res.ok) { await appAlert('Save failed: ' + (await res.text())); return; }
-    tab.content  = content;
-    tab.modified = false;
+    tab.content      = content;
+    tab.cleanContent = content;
+    tab.modified     = false;
+    // Saving promotes unpinned → pinned
+    if (tab.pinned === false) {
+      tab.pinned = true;
+      $('btn-pin-tab')?.classList.add('hidden');
+    }
     renderTabBar();
   } catch(e) {
     await appAlert('Save error: ' + e.message);
@@ -1227,6 +1310,13 @@ async function closeTab(idx) {
   activateTab(Math.min(idx, state.tabs.length - 1));
 }
 
+
+$('tab-bar').addEventListener('wheel', e => {
+  if (e.deltaY !== 0) {
+    e.preventDefault();
+    $('tab-bar').scrollLeft += e.deltaY;
+  }
+}, { passive: false });
 
 $('tab-bar').addEventListener('click', e => {
   const tab = e.target.closest('.tab');
@@ -1300,8 +1390,9 @@ async function loadWorkspace(workspacePath) {
   try {
     const res  = await fetch('/api/workspace');
     const data = await res.json();
-    state.workspace  = data.workspace || workspacePath;
-    state.pipelines  = (data.pipelines || []).map(p => p.name || p);
+    state.workspace       = data.workspace || workspacePath;
+    state.pipelineObjects = data.pipelines || [];
+    state.pipelines       = state.pipelineObjects.map(p => p.name || p);
     $('workspace-path').textContent = state.workspace;
     populatePipelineSelect();
     populateMenuPipelineList();
@@ -1413,6 +1504,7 @@ function handleMenuAction(action, dataset) {
     case 'new-file-here':      promptNewFile(); break;
     case 'new-folder-here':    promptNewFolder(); break;
     case 'paste-clipboard':    pasteFromClipboard(); break;
+    case 'upload-files':       uploadFiles(); break;
     case 'find':               cmFind(); break;
     case 'replace':            cmReplace(); break;
     case 'go-to-line':         cmGoToLine(); break;
@@ -1446,10 +1538,45 @@ async function pasteFromClipboard(stageName, basePath) {
   } catch(e) { await appAlert(e.message); }
 }
 
+/* ---- upload files ---- */
+async function uploadFiles(stageName, basePath, viewHint) {
+  stageName = stageName || getActiveStage();
+  if (!stageName) { await appAlert('Select a stage first'); return; }
+  const view = (viewHint && viewHint !== 'graph') ? viewHint : state.viewMode;
+
+  await new Promise(resolve => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.onchange = async () => {
+      const files = Array.from(input.files);
+      if (!files.length) { resolve(); return; }
+      const form = new FormData();
+      files.forEach(f => form.append('files', f));
+      const params = new URLSearchParams();
+      if (basePath) params.set('subpath', basePath);
+      try {
+        const res = await fetch(
+          `/api/upload/${encodeURIComponent(state.currentPipeline)}/${encodeURIComponent(stageName)}/${view}` +
+          (basePath ? `?${params}` : ''),
+          { method: 'POST', body: form }
+        );
+        if (!res.ok) { await appAlert('Upload failed: ' + (await res.text())); resolve(); return; }
+        const data = await res.json();
+        await refreshStageFiles(stageName);
+        if (data.saved && data.saved.length === 1) openFile(stageName, data.saved[0]);
+      } catch(e) { await appAlert('Upload error: ' + e.message); }
+      resolve();
+    };
+    input.oncancel = () => resolve();
+    input.click();
+  });
+}
+
 /* ---- run all stages in topological order ---- */
 function runAllStages() {
   if (!state.currentPipeline) { appAlert('Select a pipeline first'); return; }
-  const pipe = state.pipelines.find(p => p.name === state.currentPipeline);
+  const pipe = state.pipelineObjects.find(p => (p.name || p) === state.currentPipeline);
   if (!pipe || !pipe.stages || pipe.stages.length === 0) {
     appAlert('No stages found in current pipeline');
     return;
@@ -1608,14 +1735,22 @@ function togglePreview() {
       renderMarkdownPreview(cm ? cm.getValue() : tab.content);
       if (cm) {
         cm.off('change', cm._previewHandler);
-        cm._previewHandler = () => renderMarkdownPreview(cm.getValue());
+        let _mdTimer = null;
+        cm._previewHandler = () => {
+          clearTimeout(_mdTimer);
+          _mdTimer = setTimeout(() => renderMarkdownPreview(cm.getValue()), 300);
+        };
         cm.on('change', cm._previewHandler);
       }
     } else if (isHtml) {
       renderHtmlPreview(cm ? cm.getValue() : tab.content);
       if (cm) {
         cm.off('change', cm._previewHandler);
-        cm._previewHandler = () => renderHtmlPreview(cm.getValue());
+        let _htmlTimer = null;
+        cm._previewHandler = () => {
+          clearTimeout(_htmlTimer);
+          _htmlTimer = setTimeout(() => renderHtmlPreview(cm.getValue()), 300);
+        };
         cm.on('change', cm._previewHandler);
       }
     } else if (isUml) {
@@ -1636,12 +1771,26 @@ function togglePreview() {
   }
 }
 
+async function _saveTab(tab) {
+  try {
+    const res = await fetch(
+      `/api/file/${encodeURIComponent(tab.pipeline)}/${encodeURIComponent(tab.stage)}/${tab.view}?path=${encodeURIComponent(tab.path)}`,
+      { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({content: tab.content}) }
+    );
+    if (res.ok) { tab.modified = false; tab.cleanContent = tab.content; }
+    else console.warn('[saveTab] failed for', tab.label, await res.text());
+  } catch(e) { console.warn('[saveTab] error for', tab.label, e); }
+}
+
 async function saveAllTabs() {
-  const orig = state.activeTab;
-  for (let i = 0; i < state.tabs.length; i++) {
-    if (state.tabs[i].modified) { activateTab(i); await saveActiveTab(); }
+  // Sync live CM content into the active tab first
+  if (state.activeTab !== null && cm) {
+    const t = state.tabs[state.activeTab];
+    if (t && !t.readonly && !t._buildLocked) t.content = cm.getValue();
   }
-  if (orig !== null) activateTab(orig);
+  // Save all dirty tabs in parallel — no tab switching, no visible flash
+  await Promise.all(state.tabs.filter(t => t.modified && !t.readonly).map(_saveTab));
+  renderTabBar();
 }
 
 async function closeAllTabs() {
@@ -1684,6 +1833,7 @@ $('ctx-menu').addEventListener('click', async e => {
     case 'rename-stage':         promptRenameStage(stageName); break;
     case 'delete-stage':         openDeleteStageModal(stageName); break;
     case 'paste-clipboard':      pasteFromClipboard(stageName, basePath); break;
+    case 'upload-files':         uploadFiles(stageName, basePath, view); break;
     case 'gr-new-stage':         openStagesModal(); break;
     case 'gr-purge-upstream':    openPurgeUpstreamModal(stageName); break;
     case 'gr-purge-downstream':  openPurgeDownstreamModal(stageName); break;
@@ -2542,6 +2692,16 @@ $('btn-close-all-tabs').addEventListener('click', async () => {
   await closeAllTabs();
 });
 
+$('btn-pin-tab')?.addEventListener('click', () => {
+  if (state.activeTab === null) return;
+  const tab = state.tabs[state.activeTab];
+  if (tab.pinned === false) {
+    tab.pinned = true;
+    renderTabBar();
+    $('btn-pin-tab')?.classList.add('hidden');
+  }
+});
+
 $('btn-close-others').addEventListener('click', () => {
   if (state.activeTab === null) return;
   const keep = state.tabs[state.activeTab];
@@ -2640,6 +2800,13 @@ document.addEventListener('keydown', async e => {
   if (ctrl && e.key === 'g') { e.preventDefault(); cmGoToLine(); }
   if (ctrl && e.key === '=') { e.preventDefault(); changeFontSize(1); }
   if (ctrl && e.key === '-') { e.preventDefault(); changeFontSize(-1); }
+});
+
+window.addEventListener('beforeunload', e => {
+  if (state.tabs.some(t => t.modified)) {
+    e.preventDefault();
+    return (e.returnValue = '');
+  }
 });
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -2788,7 +2955,15 @@ async function openGraphNodePopup(stageName, nodeX, nodeY, nodeH, canvas) {
     }
     const fileItem2 = ev.target.closest('.file-item');
     if (fileItem2) {
-      await openFile(fileItem2.dataset.stage, fileItem2.dataset.path, 'repo');
+      await openFile(fileItem2.dataset.stage, fileItem2.dataset.path, 'repo', false);
+    }
+  });
+
+  treeDiv.addEventListener('dblclick', ev => {
+    ev.stopPropagation();
+    const fileItem2 = ev.target.closest('.file-item');
+    if (fileItem2) {
+      openFile(fileItem2.dataset.stage, fileItem2.dataset.path, 'repo', true);
     }
   });
 
@@ -3120,32 +3295,26 @@ function _redrawEdgesForNode(stageName) {
     });
   });
 
-  // Reposition self-loop badges for every visited stage
-  const _SL_R   = 12;
-  const _SL_PAD = 30;
+  // Reposition self-loop labels for every visited stage
+  const _SL_LINE_H = 15;
+  const _SL_PAD    = 8;
   for (const sn of visited) {
     const nc = _grNodeCoords[sn];
     if (!nc) continue;
     const badges = [..._grSvgEl.querySelectorAll(`.gr-sl-badge[data-sl-stage="${CSS.escape(sn)}"]`)];
     const n = badges.length;
     badges.forEach((sg, idx) => {
-      const cx = n === 1 ? nc.x + W / 2 : nc.x + (W / (n + 1)) * (idx + 1);
-      const cy = nc.y - _SL_PAD;
-      const labelY = cy - _SL_R - 10;
-      sg.querySelector('.gr-sl-circle')?.setAttribute('cx', cx);
-      sg.querySelector('.gr-sl-circle')?.setAttribute('cy', cy);
-      sg.querySelector('.gr-sl-hit')?.setAttribute('cx', cx);
-      sg.querySelector('.gr-sl-hit')?.setAttribute('cy', cy);
-      const icon = sg.querySelector('.gr-sl-icon');
-      if (icon) { icon.setAttribute('x', cx); icon.setAttribute('y', cy); }
-      sg.querySelectorAll('[data-sl-lbl-i]').forEach(el => {
-        const fl = parseInt(el.dataset.fileLen || 0);
-        if (el.tagName.toLowerCase() === 'text') {
-          el.setAttribute('x', cx); el.setAttribute('y', labelY);
-        } else {
-          el.setAttribute('x', cx - fl * 3 - 3); el.setAttribute('y', labelY - 9);
-        }
-      });
+      const labelX = nc.x + W / 2;
+      const labelY = nc.y - _SL_PAD - (n - 1 - idx) * _SL_LINE_H;
+      const ltxt = sg.querySelector('.gr-sl-lbl');
+      const lbg  = sg.querySelector('[data-sl-lbl-i]');
+      if (ltxt) { ltxt.setAttribute('x', labelX); ltxt.setAttribute('y', labelY); }
+      if (lbg && lbg.tagName.toLowerCase() === 'rect') {
+        const textLen = parseInt(lbg.dataset.labelTextLen || 0);
+        const approxW = textLen * 6 + 6;
+        lbg.setAttribute('x', labelX - approxW / 2);
+        lbg.setAttribute('y', labelY - 8);
+      }
     });
   }
 }
@@ -3782,11 +3951,10 @@ async function renderGraphView() {
     svg.appendChild(g);
   }
 
-  /* ── Self-loops — one badge per file, placed north of box ───── */
-  const SL_R   = 12;
-  const SL_PAD = 30;
+  /* ── Self-loops — labels stacked north of box, alphabetically ── */
+  const SL_PAD = 8;   // gap above top of box
 
-  // Group files per stage (preserve insertion order for spread)
+  // Group files per stage
   const selfMap = new Map();
   for (const e of self) {
     if (!selfMap.has(e.from)) selfMap.set(e.from, []);
@@ -3799,55 +3967,45 @@ async function renderGraphView() {
   for (const [stage, fileInfos] of selfMap) {
     const c = coords[stage];
     if (!c) continue;
+
+    // Sort alphabetically, stack vertically above the box (first alpha = top)
+    fileInfos.sort((a, b) => a.file.localeCompare(b.file));
     const n = fileInfos.length;
+    const LINE_H = 15;
 
     fileInfos.forEach((info, idx) => {
-      const slColor = _EXT_COLORS[info.ext] || 'var(--fg-dim)';
-      // Spread horizontally above the box
-      const cx = n === 1 ? c.x + W / 2 : c.x + (W / (n + 1)) * (idx + 1);
-      const cy = c.y - SL_PAD;
-      const labelY = cy - SL_R - 10;
+      const slColor  = _EXT_COLORS[info.ext] || 'var(--fg-dim)';
+      const labelX   = c.x + W / 2;
+      // idx=0 (first alpha) → topmost; idx=n-1 → closest to box
+      const labelY   = c.y - SL_PAD - (n - 1 - idx) * LINE_H;
+      const labelText = '↻' + info.file;
+      const approxW  = labelText.length * 6 + 6;
 
       const sg = mkS('g', { class: 'gr-edge-g gr-sl-badge',
         'data-sl-stage': stage, 'data-sl-file': info.file });
 
-      // Badge circle (no arrowhead — it's a loop indicator, not an arrow)
-      const badge = mkS('circle', { cx, cy, r: SL_R,
-        fill: 'var(--bg1)', stroke: slColor, 'stroke-width': 1.8, opacity: 0.85,
-        class: 'gr-sl-circle' });
-      // Wide invisible hit area
-      const badgeHit = mkS('circle', { cx, cy, r: SL_R + 6,
-        fill: 'transparent', stroke: 'none', style: 'cursor:pointer',
-        class: 'gr-sl-hit' });
-      // Loop icon
-      const icon = mkS('text', { x: cx, y: cy,
-        'text-anchor': 'middle', 'dominant-baseline': 'middle',
-        'font-size': 11, fill: slColor, 'pointer-events': 'none',
-        class: 'gr-sl-icon' });
-      icon.textContent = '↻';
-
-      // File label above badge
+      // Background rect behind label
       const lbg = mkS('rect', {
-        x: cx - info.file.length * 3 - 3, y: labelY - 9,
-        width: info.file.length * 6 + 6, height: 12,
-        fill: 'var(--bg1)', rx: 3, opacity: 0.9,
+        x: labelX - approxW / 2, y: labelY - 8,
+        width: approxW, height: 13,
+        fill: 'var(--bg1)', rx: 2, opacity: 0.9,
         style: 'cursor:pointer',
         'data-sl-lbl-i': 0, 'data-file-len': info.file.length,
+        'data-label-text-len': labelText.length,
       });
-      const ltxt = mkS('text', { x: cx, y: labelY,
+      // Label: icon + filename as one string
+      const ltxt = mkS('text', { x: labelX, y: labelY,
         'text-anchor': 'middle', 'dominant-baseline': 'middle',
         'font-size': 9.5, fill: slColor,
         'font-weight': info.isMain ? 'bold' : 'normal',
         class: 'gr-edge-lbl gr-sl-lbl', style: 'cursor:pointer', 'data-sl-lbl-i': 0 });
-      ltxt.textContent = info.file;
+      ltxt.textContent = labelText;
 
       sg.addEventListener('mouseenter', () => {
-        badge.setAttribute('stroke', 'var(--accent)');
-        icon.setAttribute('fill', 'var(--accent)');
+        ltxt.setAttribute('fill', 'var(--accent)');
       });
       sg.addEventListener('mouseleave', () => {
-        badge.setAttribute('stroke', slColor);
-        icon.setAttribute('fill', slColor);
+        ltxt.setAttribute('fill', slColor);
       });
       sg.addEventListener('click', ev => {
         if (ev.target.closest('.gr-sl-lbl')) return;
@@ -3885,7 +4043,7 @@ async function renderGraphView() {
       ltxt.addEventListener('mouseenter', ev => { ev.stopPropagation(); ltxt.setAttribute('fill', 'var(--accent)'); });
       ltxt.addEventListener('mouseleave', ev => { ev.stopPropagation(); ltxt.setAttribute('fill', slColor); });
 
-      sg.append(badge, badgeHit, icon, lbg, ltxt);
+      sg.append(lbg, ltxt);
       svg.appendChild(sg);
     });
   }
@@ -4185,6 +4343,54 @@ function showModalErr(id, msg) {
 
 
 /* ═══════════════════════════════════════════════════════════════
+   SESSION COUNTDOWN CLOCK
+   ═══════════════════════════════════════════════════════════════ */
+(function initSessionClock() {
+  const el = $('session-clock');
+  let expiresAt = null;
+  let ticker = null;
+
+  function fmt(secs) {
+    if (secs <= 0) return '0:00';
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    return `${m}:${String(s).padStart(2,'0')}`;
+  }
+
+  function tick() {
+    const remaining = Math.max(0, Math.round(expiresAt - Date.now() / 1000));
+    el.textContent = fmt(remaining);
+    el.classList.toggle('urgent', remaining <= 60);
+    el.classList.toggle('warn', remaining > 60 && remaining <= 300);
+    if (remaining === 0) {
+      clearInterval(ticker);
+      window.location.reload();
+    }
+  }
+
+  async function fetchSession() {
+    try {
+      const res = await fetch('/session');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.passkey_user || !data.expires_at) {
+        el.classList.add('hidden');
+        return;
+      }
+      expiresAt = data.expires_at;
+      el.classList.remove('hidden');
+      tick();
+      if (!ticker) ticker = setInterval(tick, 1000);
+    } catch (_) {}
+  }
+
+  fetchSession();
+  setInterval(fetchSession, 60000);
+})();
+
+/* ═══════════════════════════════════════════════════════════════
    INIT
    ═══════════════════════════════════════════════════════════════ */
 cm = CodeMirror($('editor-container'), {
@@ -4196,8 +4402,13 @@ cm = CodeMirror($('editor-container'), {
 cm.on('change', () => {
   if (_cmLoading) return;
   if (state.activeTab !== null && state.tabs[state.activeTab]) {
-    state.tabs[state.activeTab].modified = true;
-    renderTabBar();
+    const t = state.tabs[state.activeTab];
+    // Compare against on-disk content so undo-to-clean clears the dirty flag
+    const isDirty = cm.getValue() !== t.cleanContent;
+    if (isDirty !== t.modified) {
+      t.modified = isDirty;
+      renderTabBar();
+    }
   }
 });
 

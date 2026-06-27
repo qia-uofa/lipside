@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="view-repo">
-<div id="app">
+<div id="app" class="output-hidden">
 
   <!-- Menubar -->
   <nav id="menubar">
@@ -73,6 +73,7 @@
         <div class="mdi" data-action="new-file-here">New File in Stage</div>
         <div class="mdi" data-action="new-folder-here">New Folder in Stage</div>
         <div class="mdi" data-action="paste-clipboard">Paste from Clipboard</div>
+        <div class="mdi" data-action="upload-files">Upload File(s)...</div>
       </div>
     </div>
     <div class="mi" data-menu="help"><span>Help</span>
@@ -100,6 +101,7 @@
       <button class="titlebar-btn" id="btn-ws-open">Open</button>
       <button class="icon-btn" id="btn-ws-cancel">&#x2715;</button>
     </div>
+    <div id="session-clock" class="hidden" title="Session time remaining"></div>
     <button class="titlebar-btn" id="btn-edit-env-ws" title="Edit workspace .env">&#128273; .env</button>
     <button class="titlebar-btn" id="btn-config" title="Edit pipeline config.json">&#9881; Config</button>
     <button class="titlebar-btn" id="btn-new-pipeline">Add Stages</button>
@@ -149,6 +151,7 @@
       <div id="tab-bar"></div>
       <div id="tab-bar-actions">
         <button class="icon-btn tab-action-btn hidden" id="btn-toggle-preview" title="Toggle markdown preview">&#10697;</button>
+        <button class="icon-btn tab-action-btn hidden" id="btn-pin-tab" title="Pin tab">&#128204;</button>
         <button class="icon-btn tab-action-btn" id="btn-close-others" title="Close Others">&#8942;</button>
         <button class="icon-btn tab-action-btn" id="btn-close-all-tabs" title="Close All">&#10006;</button>
       </div>
@@ -167,7 +170,7 @@
   </div>
 
   <div id="build-bar">
-    <button class="icon-btn build-toggle-btn" id="btn-toggle-output" title="Toggle output">&#9660;</button>
+    <button class="icon-btn build-toggle-btn" id="btn-toggle-output" title="Show output">&#9650;</button>
     <span class="build-bar-label">OUTPUT</span>
     <span id="build-status"></span>
     <button class="icon-btn" id="btn-copy-output" title="Copy output">&#128203;</button>
@@ -408,6 +411,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/shell/shell.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/yaml/yaml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/xml/xml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/css/css.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/htmlmixed/htmlmixed.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/search.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/searchcursor.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/dialog/dialog.min.js"></script>
