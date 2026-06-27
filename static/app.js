@@ -3159,32 +3159,26 @@ function _redrawEdgesForNode(stageName) {
     });
   });
 
-  // Reposition self-loop badges for every visited stage
-  const _SL_R   = 12;
-  const _SL_PAD = 30;
+  // Reposition self-loop labels for every visited stage
+  const _SL_LINE_H = 15;
+  const _SL_PAD    = 8;
   for (const sn of visited) {
     const nc = _grNodeCoords[sn];
     if (!nc) continue;
     const badges = [..._grSvgEl.querySelectorAll(`.gr-sl-badge[data-sl-stage="${CSS.escape(sn)}"]`)];
     const n = badges.length;
     badges.forEach((sg, idx) => {
-      const cx = n === 1 ? nc.x + W / 2 : nc.x + (W / (n + 1)) * (idx + 1);
-      const cy = nc.y - _SL_PAD;
-      const labelY = cy - _SL_R - 10;
-      sg.querySelector('.gr-sl-circle')?.setAttribute('cx', cx);
-      sg.querySelector('.gr-sl-circle')?.setAttribute('cy', cy);
-      sg.querySelector('.gr-sl-hit')?.setAttribute('cx', cx);
-      sg.querySelector('.gr-sl-hit')?.setAttribute('cy', cy);
-      const icon = sg.querySelector('.gr-sl-icon');
-      if (icon) { icon.setAttribute('x', cx); icon.setAttribute('y', cy); }
-      sg.querySelectorAll('[data-sl-lbl-i]').forEach(el => {
-        const fl = parseInt(el.dataset.fileLen || 0);
-        if (el.tagName.toLowerCase() === 'text') {
-          el.setAttribute('x', cx); el.setAttribute('y', labelY);
-        } else {
-          el.setAttribute('x', cx - fl * 3 - 3); el.setAttribute('y', labelY - 9);
-        }
-      });
+      const labelX = nc.x + W / 2;
+      const labelY = nc.y - _SL_PAD - (n - 1 - idx) * _SL_LINE_H;
+      const ltxt = sg.querySelector('.gr-sl-lbl');
+      const lbg  = sg.querySelector('[data-sl-lbl-i]');
+      if (ltxt) { ltxt.setAttribute('x', labelX); ltxt.setAttribute('y', labelY); }
+      if (lbg && lbg.tagName.toLowerCase() === 'rect') {
+        const textLen = parseInt(lbg.dataset.labelTextLen || 0);
+        const approxW = textLen * 6 + 6;
+        lbg.setAttribute('x', labelX - approxW / 2);
+        lbg.setAttribute('y', labelY - 8);
+      }
     });
   }
 }
@@ -3821,11 +3815,10 @@ async function renderGraphView() {
     svg.appendChild(g);
   }
 
-  /* ── Self-loops — one badge per file, placed north of box ───── */
-  const SL_R   = 12;
-  const SL_PAD = 30;
+  /* ── Self-loops — labels stacked north of box, alphabetically ── */
+  const SL_PAD = 8;   // gap above top of box
 
-  // Group files per stage (preserve insertion order for spread)
+  // Group files per stage
   const selfMap = new Map();
   for (const e of self) {
     if (!selfMap.has(e.from)) selfMap.set(e.from, []);
@@ -3838,55 +3831,45 @@ async function renderGraphView() {
   for (const [stage, fileInfos] of selfMap) {
     const c = coords[stage];
     if (!c) continue;
+
+    // Sort alphabetically, stack vertically above the box (first alpha = top)
+    fileInfos.sort((a, b) => a.file.localeCompare(b.file));
     const n = fileInfos.length;
+    const LINE_H = 15;
 
     fileInfos.forEach((info, idx) => {
-      const slColor = _EXT_COLORS[info.ext] || 'var(--fg-dim)';
-      // Spread horizontally above the box
-      const cx = n === 1 ? c.x + W / 2 : c.x + (W / (n + 1)) * (idx + 1);
-      const cy = c.y - SL_PAD;
-      const labelY = cy - SL_R - 10;
+      const slColor  = _EXT_COLORS[info.ext] || 'var(--fg-dim)';
+      const labelX   = c.x + W / 2;
+      // idx=0 (first alpha) → topmost; idx=n-1 → closest to box
+      const labelY   = c.y - SL_PAD - (n - 1 - idx) * LINE_H;
+      const labelText = '↻' + info.file;
+      const approxW  = labelText.length * 6 + 6;
 
       const sg = mkS('g', { class: 'gr-edge-g gr-sl-badge',
         'data-sl-stage': stage, 'data-sl-file': info.file });
 
-      // Badge circle (no arrowhead — it's a loop indicator, not an arrow)
-      const badge = mkS('circle', { cx, cy, r: SL_R,
-        fill: 'var(--bg1)', stroke: slColor, 'stroke-width': 1.8, opacity: 0.85,
-        class: 'gr-sl-circle' });
-      // Wide invisible hit area
-      const badgeHit = mkS('circle', { cx, cy, r: SL_R + 6,
-        fill: 'transparent', stroke: 'none', style: 'cursor:pointer',
-        class: 'gr-sl-hit' });
-      // Loop icon
-      const icon = mkS('text', { x: cx, y: cy,
-        'text-anchor': 'middle', 'dominant-baseline': 'middle',
-        'font-size': 11, fill: slColor, 'pointer-events': 'none',
-        class: 'gr-sl-icon' });
-      icon.textContent = '↻';
-
-      // File label above badge
+      // Background rect behind label
       const lbg = mkS('rect', {
-        x: cx - info.file.length * 3 - 3, y: labelY - 9,
-        width: info.file.length * 6 + 6, height: 12,
-        fill: 'var(--bg1)', rx: 3, opacity: 0.9,
+        x: labelX - approxW / 2, y: labelY - 8,
+        width: approxW, height: 13,
+        fill: 'var(--bg1)', rx: 2, opacity: 0.9,
         style: 'cursor:pointer',
         'data-sl-lbl-i': 0, 'data-file-len': info.file.length,
+        'data-label-text-len': labelText.length,
       });
-      const ltxt = mkS('text', { x: cx, y: labelY,
+      // Label: icon + filename as one string
+      const ltxt = mkS('text', { x: labelX, y: labelY,
         'text-anchor': 'middle', 'dominant-baseline': 'middle',
         'font-size': 9.5, fill: slColor,
         'font-weight': info.isMain ? 'bold' : 'normal',
         class: 'gr-edge-lbl gr-sl-lbl', style: 'cursor:pointer', 'data-sl-lbl-i': 0 });
-      ltxt.textContent = info.file;
+      ltxt.textContent = labelText;
 
       sg.addEventListener('mouseenter', () => {
-        badge.setAttribute('stroke', 'var(--accent)');
-        icon.setAttribute('fill', 'var(--accent)');
+        ltxt.setAttribute('fill', 'var(--accent)');
       });
       sg.addEventListener('mouseleave', () => {
-        badge.setAttribute('stroke', slColor);
-        icon.setAttribute('fill', slColor);
+        ltxt.setAttribute('fill', slColor);
       });
       sg.addEventListener('click', ev => {
         if (ev.target.closest('.gr-sl-lbl')) return;
@@ -3924,7 +3907,7 @@ async function renderGraphView() {
       ltxt.addEventListener('mouseenter', ev => { ev.stopPropagation(); ltxt.setAttribute('fill', 'var(--accent)'); });
       ltxt.addEventListener('mouseleave', ev => { ev.stopPropagation(); ltxt.setAttribute('fill', slColor); });
 
-      sg.append(badge, badgeHit, icon, lbg, ltxt);
+      sg.append(lbg, ltxt);
       svg.appendChild(sg);
     });
   }
