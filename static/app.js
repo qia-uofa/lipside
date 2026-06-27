@@ -1,8 +1,9 @@
 /* ═══════════════════════════════════════════════════════════════════
-   LIPSIDE app.js  –  V3
+   LIPSIDE app.js  –  V3.1 (unpinned tabs)
    ═══════════════════════════════════════════════════════════════════ */
 
 'use strict';
+console.log('[LIPSIDE] app.js V3.1 loaded');
 
 /* ── helpers ──────────────────────────────────────────────────────── */
 const $ = id => document.getElementById(id);
@@ -138,7 +139,7 @@ let _cmLoading = false;  // true while setValue() is running; suppresses spuriou
 /* ═══════════════════════════════════════════════════════════════════
    BUILD OUTPUT PANEL
    ═══════════════════════════════════════════════════════════════════ */
-let _outputVisible = true;
+let _outputVisible = false;
 let _buildWs = null;       // currently active build WebSocket
 let _buildQueue = [];      // [{stageName, script}] pending
 let _buildRunning = false; // is a build currently executing
@@ -583,6 +584,8 @@ async function renderTree() {
 
   tree.removeEventListener('click', handleTreeClick);
   tree.addEventListener('click', handleTreeClick);
+  tree.removeEventListener('dblclick', handleTreeDblClick);
+  tree.addEventListener('dblclick', handleTreeDblClick);
   tree.removeEventListener('contextmenu', handleTreeContextMenu);
   tree.addEventListener('contextmenu', handleTreeContextMenu);
 }
@@ -657,9 +660,16 @@ function handleTreeClick(e) {
   const fileItem = e.target.closest('.file-item');
   if (fileItem) {
     _focusedCtx = { type: 'file', stageName: fileItem.dataset.stage, path: fileItem.dataset.path, view: state.viewMode, isDir: false };
-    openFile(fileItem.dataset.stage, fileItem.dataset.path);
+    openFile(fileItem.dataset.stage, fileItem.dataset.path, null, false);
     return;
   }
+}
+
+function handleTreeDblClick(e) {
+  const fileItem = e.target.closest('.file-item');
+  if (!fileItem) return;
+  // Promote the unpinned tab that just opened via the preceding click events
+  openFile(fileItem.dataset.stage, fileItem.dataset.path, null, true);
 }
 
 function _ctxItem(label, action, danger = false) {
@@ -934,14 +944,35 @@ function tabKey(pipeline, stage, view, path) {
   return `${pipeline}|${stage}|${view}|${path}`;
 }
 
-async function openFile(stageName, filePath, viewOverride = null) {
+async function openFile(stageName, filePath, viewOverride = null, pinned = true) {
   const _v = viewOverride || state.viewMode;
   const view = (_v === 'graph') ? 'repo' : _v;
   const pipeline = state.currentPipeline;
   const key      = tabKey(pipeline, stageName, view, filePath);
 
   const existing = state.tabs.findIndex(t => t.key === key);
-  if (existing !== -1) { activateTab(existing); return; }
+  if (existing !== -1) {
+    // Double-click on an already-open unpinned tab promotes it
+    if (pinned && !state.tabs[existing].pinned) {
+      state.tabs[existing].pinned = true;
+      renderTabBar();
+      $('btn-pin-tab')?.classList.add('hidden');
+    }
+    activateTab(existing);
+    return;
+  }
+
+  // For unpinned: evict the existing unmodified unpinned tab (if any) before inserting
+  if (!pinned) {
+    const unpinnedIdx = state.tabs.findIndex(t => t.pinned === false);
+    if (unpinnedIdx !== -1 && !state.tabs[unpinnedIdx].modified) {
+      state.tabs.splice(unpinnedIdx, 1);
+      if (state.activeTab !== null) {
+        if (state.activeTab > unpinnedIdx) state.activeTab--;
+        else if (state.activeTab === unpinnedIdx) state.activeTab = null;
+      }
+    }
+  }
 
   try {
     const res = await fetch(
@@ -951,19 +982,31 @@ async function openFile(stageName, filePath, viewOverride = null) {
     const data = await res.json();
 
     const fname = filePath.split('/').pop();
-    state.tabs.push({
+    const newTab = {
       key, pipeline, stage: stageName, view,
       path: filePath,
       label: `${fname}@${stageName}`,
       _fname: fname,
       content: data.content || '',
+      cleanContent: data.content || '',
       file_type: data.file_type || 'text',
       readonly: data.readonly || false,
       data_url: data.data_url || null,
       modified: false,
-    });
-    renderTabBar();
-    activateTab(state.tabs.length - 1);
+      pinned,
+    };
+
+    if (!pinned) {
+      // Insert at leftmost position
+      state.tabs.unshift(newTab);
+      if (state.activeTab !== null) state.activeTab++; // shift existing active idx
+      renderTabBar();
+      activateTab(0);
+    } else {
+      state.tabs.push(newTab);
+      renderTabBar();
+      activateTab(state.tabs.length - 1);
+    }
     await expandStage(stageName);  // make sure the stage is visible in the sidebar
   } catch(e) {
     console.error('openFile error', e);
@@ -974,14 +1017,16 @@ function renderTabBar() {
   const bar = $('tab-bar');
   bar.innerHTML = '';
   state.tabs.forEach((tab, i) => {
-    const t = el('div', 'tab' + (i === state.activeTab ? ' active' : ''));
+    const isPinned = tab.pinned !== false;
+    const cls = 'tab' + (i === state.activeTab ? ' active' : '') + (!isPinned ? ' unpinned' : '');
+    const t = el('div', cls);
     t.dataset.idx = i;
     t.dataset.view = tab.view;
     t.draggable = true;
     if (tab._buildLocked) t.appendChild(el('span', 'tab-locked', '🔒'));
     else if (tab.modified) t.appendChild(el('span', 'tab-modified', '●'));
     t.appendChild(el('span', 'tab-name', tab.label));
-    t.appendChild(el('button', 'tab-close', '×'));
+    if (isPinned) t.appendChild(el('button', 'tab-close', '×'));
     bar.appendChild(t);
   });
 }
@@ -994,11 +1039,19 @@ function activateTab(idx) {
       outgoing.content    = cm.getValue();
       outgoing.cmHistory  = cm.getHistory();
     }
+    // Auto-close outgoing unpinned tab if it has no unsaved changes
+    if (outgoing && outgoing.pinned === false && !outgoing.modified) {
+      const outIdx = state.activeTab;
+      state.tabs.splice(outIdx, 1);
+      if (idx > outIdx) idx--;
+      state.activeTab = null;
+    }
   }
   if (idx < 0 || idx >= state.tabs.length) {
     state.activeTab = null;
     showEmptyEditor();
     $('btn-toggle-preview').classList.add('hidden');
+    $('btn-pin-tab')?.classList.add('hidden');
     return;
   }
   state.activeTab = idx;
@@ -1010,6 +1063,9 @@ function activateTab(idx) {
   const ext = _tabFname.split('.').pop().toLowerCase();
   const isPreviewToggleable = (ext === 'md' || ext === 'markdown' || ext === 'html' || ext === 'uml') && !state.tabs[idx].readonly;
   $('btn-toggle-preview').classList.toggle('hidden', !isPreviewToggleable);
+
+  // Show pin button only for unpinned tabs
+  $('btn-pin-tab')?.classList.toggle('hidden', state.tabs[idx].pinned !== false);
 
   document.querySelectorAll('.file-item').forEach(el => {
     const t = state.tabs[idx];
@@ -1165,6 +1221,12 @@ function loadIntoEditor(tab) {
       if (state.activeTab === null) return;
       const t = state.tabs[state.activeTab];
       if (!t.modified) { t.modified = true; renderTabBar(); }
+      // Auto-promote unpinned → pinned on first edit
+      if (t.pinned === false) {
+        t.pinned = true;
+        renderTabBar();
+        $('btn-pin-tab')?.classList.add('hidden');
+      }
     });
   }
 
@@ -1219,8 +1281,14 @@ async function saveActiveTab() {
       { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({content}) }
     );
     if (!res.ok) { await appAlert('Save failed: ' + (await res.text())); return; }
-    tab.content  = content;
-    tab.modified = false;
+    tab.content      = content;
+    tab.cleanContent = content;
+    tab.modified     = false;
+    // Saving promotes unpinned → pinned
+    if (tab.pinned === false) {
+      tab.pinned = true;
+      $('btn-pin-tab')?.classList.add('hidden');
+    }
     renderTabBar();
   } catch(e) {
     await appAlert('Save error: ' + e.message);
@@ -1242,6 +1310,13 @@ async function closeTab(idx) {
   activateTab(Math.min(idx, state.tabs.length - 1));
 }
 
+
+$('tab-bar').addEventListener('wheel', e => {
+  if (e.deltaY !== 0) {
+    e.preventDefault();
+    $('tab-bar').scrollLeft += e.deltaY;
+  }
+}, { passive: false });
 
 $('tab-bar').addEventListener('click', e => {
   const tab = e.target.closest('.tab');
@@ -1702,7 +1777,7 @@ async function _saveTab(tab) {
       `/api/file/${encodeURIComponent(tab.pipeline)}/${encodeURIComponent(tab.stage)}/${tab.view}?path=${encodeURIComponent(tab.path)}`,
       { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({content: tab.content}) }
     );
-    if (res.ok) { tab.modified = false; }
+    if (res.ok) { tab.modified = false; tab.cleanContent = tab.content; }
     else console.warn('[saveTab] failed for', tab.label, await res.text());
   } catch(e) { console.warn('[saveTab] error for', tab.label, e); }
 }
@@ -2617,6 +2692,16 @@ $('btn-close-all-tabs').addEventListener('click', async () => {
   await closeAllTabs();
 });
 
+$('btn-pin-tab')?.addEventListener('click', () => {
+  if (state.activeTab === null) return;
+  const tab = state.tabs[state.activeTab];
+  if (tab.pinned === false) {
+    tab.pinned = true;
+    renderTabBar();
+    $('btn-pin-tab')?.classList.add('hidden');
+  }
+});
+
 $('btn-close-others').addEventListener('click', () => {
   if (state.activeTab === null) return;
   const keep = state.tabs[state.activeTab];
@@ -2870,7 +2955,15 @@ async function openGraphNodePopup(stageName, nodeX, nodeY, nodeH, canvas) {
     }
     const fileItem2 = ev.target.closest('.file-item');
     if (fileItem2) {
-      await openFile(fileItem2.dataset.stage, fileItem2.dataset.path, 'repo');
+      await openFile(fileItem2.dataset.stage, fileItem2.dataset.path, 'repo', false);
+    }
+  });
+
+  treeDiv.addEventListener('dblclick', ev => {
+    ev.stopPropagation();
+    const fileItem2 = ev.target.closest('.file-item');
+    if (fileItem2) {
+      openFile(fileItem2.dataset.stage, fileItem2.dataset.path, 'repo', true);
     }
   });
 
@@ -4309,8 +4402,13 @@ cm = CodeMirror($('editor-container'), {
 cm.on('change', () => {
   if (_cmLoading) return;
   if (state.activeTab !== null && state.tabs[state.activeTab]) {
-    state.tabs[state.activeTab].modified = true;
-    renderTabBar();
+    const t = state.tabs[state.activeTab];
+    // Compare against on-disk content so undo-to-clean clears the dirty flag
+    const isDirty = cm.getValue() !== t.cleanContent;
+    if (isDirty !== t.modified) {
+      t.modified = isDirty;
+      renderTabBar();
+    }
   }
 });
 

@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="view-repo">
-<div id="app">
+<div id="app" class="output-hidden">
 
   <!-- Menubar -->
   <nav id="menubar">
@@ -151,6 +151,7 @@
       <div id="tab-bar"></div>
       <div id="tab-bar-actions">
         <button class="icon-btn tab-action-btn hidden" id="btn-toggle-preview" title="Toggle markdown preview">&#10697;</button>
+        <button class="icon-btn tab-action-btn hidden" id="btn-pin-tab" title="Pin tab">&#128204;</button>
         <button class="icon-btn tab-action-btn" id="btn-close-others" title="Close Others">&#8942;</button>
         <button class="icon-btn tab-action-btn" id="btn-close-all-tabs" title="Close All">&#10006;</button>
       </div>
@@ -169,7 +170,7 @@
   </div>
 
   <div id="build-bar">
-    <button class="icon-btn build-toggle-btn" id="btn-toggle-output" title="Toggle output">&#9660;</button>
+    <button class="icon-btn build-toggle-btn" id="btn-toggle-output" title="Show output">&#9650;</button>
     <span class="build-bar-label">OUTPUT</span>
     <span id="build-status"></span>
     <button class="icon-btn" id="btn-copy-output" title="Copy output">&#128203;</button>
