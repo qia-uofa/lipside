@@ -104,7 +104,8 @@ const el = (tag, cls, txt) => {
 /* ── state ────────────────────────────────────────────────────────── */
 const state = {
   workspace: '',
-  pipelines: [],
+  pipelines: [],       // array of pipeline name strings
+  pipelineObjects: [], // full objects [{name, stages}] from the API
   currentPipeline: null,
   viewMode: 'graph',
   sidebarVisible: true,
@@ -989,7 +990,10 @@ function activateTab(idx) {
   // Flush unsaved editor content back into the outgoing tab before switching
   if (state.activeTab !== null && state.activeTab !== idx && cm) {
     const outgoing = state.tabs[state.activeTab];
-    if (outgoing && !outgoing.readonly && !outgoing._buildLocked) outgoing.content = cm.getValue();
+    if (outgoing && !outgoing.readonly && !outgoing._buildLocked) {
+      outgoing.content    = cm.getValue();
+      outgoing.cmHistory  = cm.getHistory();
+    }
   }
   if (idx < 0 || idx >= state.tabs.length) {
     state.activeTab = null;
@@ -1168,14 +1172,23 @@ function loadIntoEditor(tab) {
   cm.setOption('readOnly', tab._buildLocked ? true : false);
 
   const modeMap = {
-    py: 'python', js: 'javascript', md: 'markdown',
-    sh: 'shell', bash: 'shell', txt: 'null',
-    json: 'javascript', yaml: 'yaml', yml: 'yaml',
+    py: 'python', pyw: 'python',
+    js: 'javascript', mjs: 'javascript', cjs: 'javascript',
+    ts: 'javascript', tsx: 'javascript',
+    md: 'markdown', markdown: 'markdown',
+    sh: 'shell', bash: 'shell', zsh: 'shell',
+    json: 'javascript', jsonc: 'javascript',
+    yaml: 'yaml', yml: 'yaml',
+    html: 'htmlmixed', htm: 'htmlmixed',
+    css: 'css', scss: 'css', sass: 'css', less: 'css',
+    xml: 'xml', svg: 'xml',
+    txt: null,
   };
   cm.setOption('mode', modeMap[ext] || 'null');
   _cmLoading = true;
   cm.setValue(tab.content);
   cm.clearHistory();
+  if (tab.cmHistory) cm.setHistory(tab.cmHistory);
   _cmLoading = false;
   cmPath  = tab.key;
   cmDirty = false;
@@ -1302,8 +1315,9 @@ async function loadWorkspace(workspacePath) {
   try {
     const res  = await fetch('/api/workspace');
     const data = await res.json();
-    state.workspace  = data.workspace || workspacePath;
-    state.pipelines  = (data.pipelines || []).map(p => p.name || p);
+    state.workspace       = data.workspace || workspacePath;
+    state.pipelineObjects = data.pipelines || [];
+    state.pipelines       = state.pipelineObjects.map(p => p.name || p);
     $('workspace-path').textContent = state.workspace;
     populatePipelineSelect();
     populateMenuPipelineList();
@@ -1487,7 +1501,7 @@ async function uploadFiles(stageName, basePath, viewHint) {
 /* ---- run all stages in topological order ---- */
 function runAllStages() {
   if (!state.currentPipeline) { appAlert('Select a pipeline first'); return; }
-  const pipe = state.pipelines.find(p => p.name === state.currentPipeline);
+  const pipe = state.pipelineObjects.find(p => (p.name || p) === state.currentPipeline);
   if (!pipe || !pipe.stages || pipe.stages.length === 0) {
     appAlert('No stages found in current pipeline');
     return;
@@ -1646,14 +1660,22 @@ function togglePreview() {
       renderMarkdownPreview(cm ? cm.getValue() : tab.content);
       if (cm) {
         cm.off('change', cm._previewHandler);
-        cm._previewHandler = () => renderMarkdownPreview(cm.getValue());
+        let _mdTimer = null;
+        cm._previewHandler = () => {
+          clearTimeout(_mdTimer);
+          _mdTimer = setTimeout(() => renderMarkdownPreview(cm.getValue()), 300);
+        };
         cm.on('change', cm._previewHandler);
       }
     } else if (isHtml) {
       renderHtmlPreview(cm ? cm.getValue() : tab.content);
       if (cm) {
         cm.off('change', cm._previewHandler);
-        cm._previewHandler = () => renderHtmlPreview(cm.getValue());
+        let _htmlTimer = null;
+        cm._previewHandler = () => {
+          clearTimeout(_htmlTimer);
+          _htmlTimer = setTimeout(() => renderHtmlPreview(cm.getValue()), 300);
+        };
         cm.on('change', cm._previewHandler);
       }
     } else if (isUml) {
@@ -1674,12 +1696,26 @@ function togglePreview() {
   }
 }
 
+async function _saveTab(tab) {
+  try {
+    const res = await fetch(
+      `/api/file/${encodeURIComponent(tab.pipeline)}/${encodeURIComponent(tab.stage)}/${tab.view}?path=${encodeURIComponent(tab.path)}`,
+      { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({content: tab.content}) }
+    );
+    if (res.ok) { tab.modified = false; }
+    else console.warn('[saveTab] failed for', tab.label, await res.text());
+  } catch(e) { console.warn('[saveTab] error for', tab.label, e); }
+}
+
 async function saveAllTabs() {
-  const orig = state.activeTab;
-  for (let i = 0; i < state.tabs.length; i++) {
-    if (state.tabs[i].modified) { activateTab(i); await saveActiveTab(); }
+  // Sync live CM content into the active tab first
+  if (state.activeTab !== null && cm) {
+    const t = state.tabs[state.activeTab];
+    if (t && !t.readonly && !t._buildLocked) t.content = cm.getValue();
   }
-  if (orig !== null) activateTab(orig);
+  // Save all dirty tabs in parallel — no tab switching, no visible flash
+  await Promise.all(state.tabs.filter(t => t.modified && !t.readonly).map(_saveTab));
+  renderTabBar();
 }
 
 async function closeAllTabs() {
@@ -2679,6 +2715,13 @@ document.addEventListener('keydown', async e => {
   if (ctrl && e.key === 'g') { e.preventDefault(); cmGoToLine(); }
   if (ctrl && e.key === '=') { e.preventDefault(); changeFontSize(1); }
   if (ctrl && e.key === '-') { e.preventDefault(); changeFontSize(-1); }
+});
+
+window.addEventListener('beforeunload', e => {
+  if (state.tabs.some(t => t.modified)) {
+    e.preventDefault();
+    return (e.returnValue = '');
+  }
 });
 
 /* ═══════════════════════════════════════════════════════════════════
