@@ -180,6 +180,27 @@ class RenameBody(BaseModel):
     new_path: str
 
 
+# ── upload files ────────────────────────────────────────────────────
+from fastapi import UploadFile, File
+from typing import List
+
+@router.post("/api/upload/{pipeline}/{stage}/{view}")
+async def upload_files(pipeline: str, stage: str, view: str,
+                       files: List[UploadFile] = File(...),
+                       subpath: str = ""):
+    root = _stage_root(pipeline, stage, view)
+    saved = []
+    for f in files:
+        rel = (subpath + "/" + f.filename).lstrip("/") if subpath else f.filename
+        target = (root / rel).resolve()
+        if not str(target).startswith(str(root.resolve())):
+            raise HTTPException(400, f"Path escapes stage directory: {rel}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(await f.read())
+        saved.append(rel)
+    return {"ok": True, "saved": saved}
+
+
 @router.post("/api/rename/{pipeline}/{stage}/{view}")
 async def rename_file(pipeline: str, stage: str, view: str, body: RenameBody):
     src = _resolve(pipeline, stage, view, body.old_path)
