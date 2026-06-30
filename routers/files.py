@@ -174,6 +174,35 @@ async def open_terminal(body: dict):
     return {"ok": True}
 
 
+@router.post("/api/open-explorer")
+async def open_in_explorer(body: dict):
+    """Reveal a file or directory in the system file explorer."""
+    target = Path(body.get("path", ""))
+    if not target.exists():
+        raise HTTPException(404, "Path not found")
+    target = target.resolve()
+
+    try:
+        if sys.platform == "win32":
+            if target.is_dir():
+                subprocess.Popen(["explorer", str(target)])
+            else:
+                subprocess.Popen(["explorer", "/select,", str(target)])
+        elif sys.platform == "darwin":
+            if target.is_dir():
+                subprocess.Popen(["open", str(target)])
+            else:
+                subprocess.Popen(["open", "-R", str(target)])  # reveal in Finder
+        else:
+            # Linux: xdg-open doesn't support file selection; open parent dir
+            open_path = target if target.is_dir() else target.parent
+            subprocess.Popen(["xdg-open", str(open_path)])
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+    return {"ok": True}
+
+
 # ── rename / move ────────────────────────────────────────────────
 class RenameBody(BaseModel):
     old_path: str

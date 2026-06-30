@@ -534,10 +534,18 @@ async def create_pipeline(body: CreatePipelineBody):
             if not is_final:
                 next_stage = stages[i + 1].get("name", "").strip() if i + 1 < len(stages) else ""
                 if bf_path.suffix == ".py":
+                    iname = bf_path.stem
                     content = (
                         'env_block = """\n'
                         "```env\n"
                         f"TARGET={next_stage}\n"
+                        f"ALIAS={iname}\n"
+                        "```\n"
+                        "```sourceignore\n"
+                        ".thought\n"
+                        "```\n"
+                        "```targetignore\n"
+                        "*\n"
                         "```\n"
                         '"""\n'
                         "import os\n"
@@ -547,13 +555,18 @@ async def create_pipeline(body: CreatePipelineBody):
                         "_, env = env_from_build_file(env_block)\n"
                     )
                 else:
+                    iname = bf_path.stem
                     content = (
                         "```env\n"
                         f"TARGET={next_stage}\n"
-                        "```\n\n"
+                        f"ALIAS={iname}\n"
+                        "```\n"
+                        "```sourceignore\n"
+                        ".thought\n"
+                        "```\n"
                         "```targetignore\n"
                         "*\n"
-                        "```\n\n"
+                        "```\n"
                     )
                 bf_path.write_text(content, encoding="utf-8")
 

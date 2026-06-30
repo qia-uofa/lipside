@@ -190,11 +190,24 @@ function _renderBuildQueue() {
   panel.classList.remove('hidden');
   list.innerHTML = '';
   _buildQueue.forEach((item, idx) => {
-    const div = el('div', 'bq-item' + (idx === 0 && _buildRunning ? ' bq-running' : ''));
+    const running = idx === 0 && _buildRunning;
+    const div = el('div', 'bq-item' + (running ? ' bq-running' : ''));
     const label = item.script
       ? `${item.stageName}/${item.script}`
       : `${item.stageName}/*`;
-    div.textContent = label;
+    const labelSpan = el('span', 'bq-label', label);
+    div.appendChild(labelSpan);
+    if (running) {
+      const stopBtn = el('button', 'bq-stop-btn', '⬛');
+      stopBtn.title = 'Interrupt build';
+      stopBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        if (_buildWs && _buildWs.readyState === WebSocket.OPEN) {
+          _buildWs.send('INTERRUPT');
+        }
+      });
+      div.appendChild(stopBtn);
+    }
     list.appendChild(div);
   });
 }
@@ -275,7 +288,6 @@ function _processNextBuild() {
   const { pipeline, stageName, script } = _buildQueue[0];
   _renderBuildQueue();
   expandStage(stageName);
-  _ensureOutputVisible();
   _lockStageTabs(pipeline, stageName);
 
   const out = $('build-output');
@@ -298,8 +310,9 @@ function _processNextBuild() {
       const evt = JSON.parse(text);
       if (evt.event === 'done') {
         const ok = evt.exit_code === 0;
-        out.textContent += `\n[exit ${evt.exit_code}]\n`;
-        _setStatus(`${cmd} — exit ${evt.exit_code}`, ok ? 'success' : 'error');
+        const tag = evt.interrupted ? 'interrupted' : `exit ${evt.exit_code}`;
+        out.textContent += `\n[${tag}]\n`;
+        _setStatus(`${cmd} — ${tag}`, ok ? 'success' : 'error');
         if (ok) {
           renderTree().then(() => expandStage(stageName));
         } else {
@@ -701,6 +714,7 @@ function handleTreeContextMenu(e) {
     ctx.dataset.isdir = 'false';
     _focusedCtx = { type: 'file', stageName: fileItem.dataset.stage, path: fileItem.dataset.path, view: state.viewMode, isDir: false };
     ctx.appendChild(_ctxItem('\uD83D\uDCC4 Open in Terminal', 'open-terminal'));
+    ctx.appendChild(_ctxItem('\uD83D\uDCC2 Show in File Explorer', 'open-explorer'));
     ctx.appendChild(_ctxSep());
     ctx.appendChild(_ctxItem('Rename...', 'rename'));
     ctx.appendChild(_ctxItem('Move to...', 'move'));
@@ -718,6 +732,7 @@ function handleTreeContextMenu(e) {
     ctx.appendChild(_ctxItem('\u2191 Upload File(s)...', 'upload-files'));
     ctx.appendChild(_ctxSep());
     ctx.appendChild(_ctxItem('\uD83D\uDCC4 Open in Terminal', 'open-terminal'));
+    ctx.appendChild(_ctxItem('\uD83D\uDCC2 Show in File Explorer', 'open-explorer'));
     ctx.appendChild(_ctxSep());
     ctx.appendChild(_ctxItem('Rename...', 'rename'));
     ctx.appendChild(_ctxItem('Move to...', 'move'));
@@ -1825,6 +1840,7 @@ $('ctx-menu').addEventListener('click', async e => {
     case 'new-file':        promptNewFile(stageName, basePath, view); break;
     case 'new-folder':      promptNewFolder(stageName, basePath, view); break;
     case 'open-terminal':   openInTerminal(stageName, path || '', view); break;
+    case 'open-explorer':   openInExplorer(stageName, path || '', view); break;
     case 'open-file':       openFile(stageName, path, view); break;
     case 'rename':          promptRename(stageName, path, view); break;
     case 'move':            promptMove(stageName, path, view); break;
@@ -1861,6 +1877,25 @@ async function openInTerminal(stageName, filePath, view) {
   } catch(e) { await appAlert('Open terminal failed: ' + e.message); }
 }
 
+async function openInExplorer(stageName, filePath, view) {
+  const params = new URLSearchParams({
+    pipeline: state.currentPipeline,
+    stage:    stageName,
+    view:     view,
+  });
+  if (filePath) params.set('path', filePath);
+  try {
+    const res = await fetch(`/api/resolve-path?${params}`);
+    if (!res.ok) { await appAlert('Could not resolve path: ' + await res.text()); return; }
+    const { abs_path } = await res.json();
+    await fetch('/api/open-explorer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: abs_path })
+    });
+  } catch(e) { await appAlert('Open explorer failed: ' + e.message); }
+}
+
 async function promptNewFile(stageName, basePath, viewHint) {
   stageName = stageName || getActiveStage();
   if (!stageName) { await appAlert('Select a stage first'); return; }
@@ -1871,7 +1906,7 @@ async function promptNewFile(stageName, basePath, viewHint) {
     if (!raw) return;
     name = raw.name + '.' + raw.ext;
     if (raw.ext === 'py') {
-      content = 'env_block = """\n```env\nTARGET=\n```\n"""\nimport os\nimport time\nimport sys\nfrom lips.utils.parse_build_files import env_from_build_file\n_, env = env_from_build_file(env_block)\n';
+      content = 'env_block = """\n```env\nTARGET=\nALIAS=' + raw.name + '\n```\n```sourceignore\n.thought\n```\n```targetignore\n*\n```\n"""\nimport os\nimport time\nimport sys\nfrom lips.utils.parse_build_files import env_from_build_file\n_, env = env_from_build_file(env_block)\n';
     }
   } else {
     name = await appPrompt('New file name:');
@@ -2669,6 +2704,13 @@ async function refreshGraphView() {
   }
 }
 
+$('btn-graph-recycle').addEventListener('click', async () => {
+  _grShowRecycleBin = !_grShowRecycleBin;
+  $('btn-graph-recycle').classList.toggle('active', _grShowRecycleBin);
+  $('btn-graph-recycle').title = _grShowRecycleBin ? 'Hide Recycle Bin stage' : 'Show Recycle Bin stage';
+  await refreshGraphView();
+});
+
 $('btn-graph-refresh').addEventListener('click', async () => { await refreshGraphView(); });
 
 // Persistent fallback: empty-space right-click when no SVG bgRect exists (no pipeline / no stages)
@@ -2815,6 +2857,7 @@ window.addEventListener('beforeunload', e => {
 const _grPopups = {};        // stageName → popup element
 const _grPopupLoaders = {};  // stageName → _loadPopup(view) fn
 let _graphDirty  = true;
+let _grShowRecycleBin = false; // toggle: show Recycle-Bin stage in graph
 let _grCanvasEl  = null;  // current .gr-canvas element
 let _grNodeCoords = {};  // stageName → {x,y} original coords
 let _grSvgEl     = null;  // current graph <svg> element
@@ -2982,6 +3025,7 @@ async function openGraphNodePopup(stageName, nodeX, nodeY, nodeH, canvas) {
       ctx.dataset.path  = fileItem2.dataset.path;
       ctx.dataset.isdir = 'false';
       ctx.appendChild(_ctxItem('\uD83D\uDCC4 Open in Terminal', 'open-terminal'));
+      ctx.appendChild(_ctxItem('\uD83D\uDCC2 Show in File Explorer', 'open-explorer'));
       ctx.appendChild(_ctxSep());
       ctx.appendChild(_ctxItem('Rename...', 'rename'));
       ctx.appendChild(_ctxItem('Move to...', 'move'));
@@ -2996,6 +3040,7 @@ async function openGraphNodePopup(stageName, nodeX, nodeY, nodeH, canvas) {
       ctx.appendChild(_ctxItem('\uD83D\uDCCB Paste from Clipboard', 'paste-clipboard'));
       ctx.appendChild(_ctxSep());
       ctx.appendChild(_ctxItem('\uD83D\uDCC4 Open in Terminal', 'open-terminal'));
+      ctx.appendChild(_ctxItem('\uD83D\uDCC2 Show in File Explorer', 'open-explorer'));
       ctx.appendChild(_ctxSep());
       ctx.appendChild(_ctxItem('Rename...', 'rename'));
       ctx.appendChild(_ctxItem('Move to...', 'move'));
@@ -3527,10 +3572,10 @@ window.addEventListener('mouseup', async () => {
       const safeName = raw.name.replace(/[^a-zA-Z0-9_\-]/g, '_');
       const fileName = safeName + '.' + raw.ext;
       const content  = fromStage === toStage
-        ? 'Your task is to update the repository <env:SOURCE> by generating files needed to be updated.\n'
+        ? '```env\nTARGET=' + fromStage + '\nALIAS=' + safeName + '\n```\n```sourceignore\n.thought\n```\n```targetignore\n*\n```\n'
         : raw.ext === 'py'
-          ? 'env_block = """\n```env\nTARGET=' + toStage + '\n```\n"""\nimport os\nimport time\nimport sys\nfrom lips.utils.parse_build_files import env_from_build_file\n_, env = env_from_build_file(env_block)\n'
-          : '```env\nTARGET=' + toStage + '\n```\n\nYour task is to transform the repository <env:SOURCE> to <env:TARGET> by generating files.\n';
+          ? 'env_block = """\n```env\nTARGET=' + toStage + '\nALIAS=' + safeName + '\n```\n```sourceignore\n.thought\n```\n```targetignore\n*\n```\n"""\nimport os\nimport time\nimport sys\nfrom lips.utils.parse_build_files import env_from_build_file\n_, env = env_from_build_file(env_block)\n'
+          : '```env\nTARGET=' + toStage + '\nALIAS=' + safeName + '\n```\n```sourceignore\n.thought\n```\n```targetignore\n*\n```\n';
       try {
         const r = await fetch(
           `/api/file/${encodeURIComponent(state.currentPipeline)}/${encodeURIComponent(fromStage)}/build?path=${encodeURIComponent(fileName)}`,
@@ -3696,6 +3741,9 @@ async function renderGraphView() {
     const data = await r.json();
     const pipeInfo = (data.pipelines || []).find(p => p.name === pipeline);
     stages = pipeInfo?.stages || [];
+    const _hasRecycleBin = stages.includes('Recycle-Bin');
+    $('btn-graph-recycle').classList.toggle('hidden', !_hasRecycleBin);
+    if (!_grShowRecycleBin) stages = stages.filter(s => s !== 'Recycle-Bin');
     // Parse TARGET= from each stage's build files to derive edges
     for (const stage of stages) {
       try {
@@ -3861,7 +3909,11 @@ async function renderGraphView() {
     });
     g.addEventListener('click', ev => {
       if (ev.target.closest('.gr-edge-lbl')) return;
-      if (files.length) files.forEach(f => openFile(from, f, 'build'));
+      if (files.length) files.forEach(f => openFile(from, f, 'build', false));
+    });
+    g.addEventListener('dblclick', ev => {
+      if (ev.target.closest('.gr-edge-lbl')) return;
+      if (files.length) files.forEach(f => openFile(from, f, 'build', true));
     });
     g.addEventListener('contextmenu', ev => {
       if (ev.target.closest('.gr-edge-lbl')) return;
@@ -3915,9 +3967,10 @@ async function renderGraphView() {
           'font-weight': info.isMain ? 'bold' : 'normal',
           class: 'gr-edge-lbl', style: 'cursor:pointer', 'data-lbl-i': i });
         txt.textContent = file;
-        const openIt = ev => { ev.stopPropagation(); openFile(from, file, 'build'); };
-        bg.addEventListener('click', openIt);
-        txt.addEventListener('click', openIt);
+        const openIt    = ev => { ev.stopPropagation(); openFile(from, file, 'build', false); };
+        const openItPin = ev => { ev.stopPropagation(); openFile(from, file, 'build', true); };
+        bg.addEventListener('click', openIt);   txt.addEventListener('click', openIt);
+        bg.addEventListener('dblclick', openItPin); txt.addEventListener('dblclick', openItPin);
         txt.addEventListener('mouseenter', ev => { ev.stopPropagation(); txt.setAttribute('fill', 'var(--accent)'); });
         txt.addEventListener('mouseleave', ev => { ev.stopPropagation(); txt.setAttribute('fill', 'var(--fg-dim)'); });
         const showCtx = ev => {
@@ -4009,7 +4062,11 @@ async function renderGraphView() {
       });
       sg.addEventListener('click', ev => {
         if (ev.target.closest('.gr-sl-lbl')) return;
-        openFile(stage, info.file, 'build');
+        openFile(stage, info.file, 'build', false);
+      });
+      sg.addEventListener('dblclick', ev => {
+        if (ev.target.closest('.gr-sl-lbl')) return;
+        openFile(stage, info.file, 'build', true);
       });
       const showSlCtx = ev => {
         ev.preventDefault(); ev.stopPropagation();
@@ -4036,8 +4093,10 @@ async function renderGraphView() {
         });
       };
       sg.addEventListener('contextmenu', showSlCtx);
-      lbg.addEventListener('click', ev => { ev.stopPropagation(); openFile(stage, info.file, 'build'); });
-      ltxt.addEventListener('click', ev => { ev.stopPropagation(); openFile(stage, info.file, 'build'); });
+      lbg.addEventListener('click',    ev => { ev.stopPropagation(); openFile(stage, info.file, 'build', false); });
+      lbg.addEventListener('dblclick', ev => { ev.stopPropagation(); openFile(stage, info.file, 'build', true); });
+      ltxt.addEventListener('click',    ev => { ev.stopPropagation(); openFile(stage, info.file, 'build', false); });
+      ltxt.addEventListener('dblclick', ev => { ev.stopPropagation(); openFile(stage, info.file, 'build', true); });
       lbg.addEventListener('contextmenu', showSlCtx);
       ltxt.addEventListener('contextmenu', showSlCtx);
       ltxt.addEventListener('mouseenter', ev => { ev.stopPropagation(); ltxt.setAttribute('fill', 'var(--accent)'); });

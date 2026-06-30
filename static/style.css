@@ -255,6 +255,9 @@ html, body {
 }
 
 .titlebar-btn:hover { background: var(--bg4); }
+.titlebar-btn.active { color: var(--accent); background: var(--bg3); }
+#btn-graph-recycle { opacity: 0.35; }
+#btn-graph-recycle.active { opacity: 1; }
 .titlebar-btn.icon-btn { width: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .titlebar-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .titlebar-btn.primary:hover { background: var(--accent2); }
@@ -1628,6 +1631,20 @@ body.view-graph #sidebar.collapsed { width: 0 !important; min-width: 0; border: 
   0%, 100% { opacity: 1; transform: scale(1); }
   50%       { opacity: 0.3; transform: scale(0.65); }
 }
+.bq-label { flex: 1; }
+.bq-stop-btn {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: 8px;
+  padding: 1px 3px;
+  border-radius: 2px;
+  line-height: 1;
+  opacity: 0.6;
+}
+.bq-stop-btn:hover { background: var(--bg4); color: var(--red, #fc8181); opacity: 1; }
 
 /* ─── Graph view: new unconstrained DAG renderer (gr-*) ────────── */
 .gr-canvas {
